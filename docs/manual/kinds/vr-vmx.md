@@ -1,6 +1,6 @@
 # Juniper vMX
 
-[Juniper vMX](https://www.juniper.net/us/en/products-services/routing/mx-series/vmx/) virtualized router is identified with `vr-vmx` kind in the [topology file](../topo-def-file.md). It is built using [vrnetlab](../vrnetlab.md) project and essentially is a Qemu VM packaged in a docker container format.
+[Juniper vMX](https://www.juniper.net/us/en/products/routers/mx-series/vmx-virtual-router-software.html) virtualized router is identified with `vr-vmx` kind in the [topology file](../topo-def-file.md). It is built using [vrnetlab](../vrnetlab.md) project and essentially is a Qemu VM packaged in a docker container format.
 
 vr-vmx nodes launched with containerlab comes up pre-provisioned with SSH, SNMP, NETCONF and gNMI services enabled.
 
@@ -62,6 +62,5 @@ The following labs feature vr-vmx node:
 ## Known issues and limitations
 
 * when listing docker containers, vr-vmx container will always report unhealthy status. Do not rely on this status.
-* LACP and BPDU packets are not propagated to/from vrnetlab based routers launched with containerlab.
 * vMX requires Linux kernel 4.17+
 * To check the boot log, use `docker logs -f <node-name>`.

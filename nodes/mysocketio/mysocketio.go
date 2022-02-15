@@ -26,14 +26,14 @@ func (s *mySocketIO) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error
 	for _, o := range opts {
 		o(s)
 	}
-	s.cfg.Entrypoint = "/bin/bash"
+
 	return nil
 }
 
 func (s *mySocketIO) Config() *types.NodeConfig { return s.cfg }
 
-func (s *mySocketIO) PreDeploy(configName, labCADir, labCARoot string) error {
-	// utils.CreateDirectory(s.cfg.LabDir, 0777)
+func (*mySocketIO) PreDeploy(_, _, _ string) error {
+
 	return nil
 }
 func (s *mySocketIO) Deploy(ctx context.Context) error {
@@ -52,11 +52,11 @@ func (s *mySocketIO) PostDeploy(ctx context.Context, ns map[string]nodes.Node) e
 	return err
 }
 
-func (s *mySocketIO) WithMgmtNet(*types.MgmtNet)             {}
+func (*mySocketIO) WithMgmtNet(*types.MgmtNet)               {}
 func (s *mySocketIO) WithRuntime(r runtime.ContainerRuntime) { s.runtime = r }
 func (s *mySocketIO) GetRuntime() runtime.ContainerRuntime   { return s.runtime }
 
-func (s *mySocketIO) GetContainer(ctx context.Context) (*types.GenericContainer, error) {
+func (*mySocketIO) GetContainer(_ context.Context) (*types.GenericContainer, error) {
 	return nil, nil
 }
 
@@ -70,7 +70,7 @@ func (s *mySocketIO) GetImages() map[string]string {
 	}
 }
 
-func (s *mySocketIO) SaveConfig(ctx context.Context) error {
+func (*mySocketIO) SaveConfig(_ context.Context) error {
 	return nil
 }
 

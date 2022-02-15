@@ -34,9 +34,9 @@ const (
 	// NSPath value assigned to host interfaces
 	hostNSPath = "__host"
 	// veth link mtu
-	defaultVethLinkMTU = 9500
+	DefaultVethLinkMTU = 9500
 	// containerlab's reserved OUI
-	clabOUI = "aa:c1:ab"
+	ClabOUI = "aa:c1:ab"
 
 	// label names
 	ContainerlabLabel = "containerlab"
@@ -58,6 +58,7 @@ var kinds = []string{
 	"vr-n9kv",
 	"vr-sros",
 	"vr-vmx",
+	"vr-vqfx",
 	"vr-xrv",
 	"vr-xrv9k",
 	"vr-veos",
@@ -242,7 +243,8 @@ func (c *CLab) createNodeCfg(nodeName string, nodeDef *types.NodeDefinition, idx
 		Kernel:          c.Config.Topology.GetNodeKernel(nodeName),
 		Runtime:         c.Config.Topology.GetNodeRuntime(nodeName),
 		CPU:             c.Config.Topology.GetNodeCPU(nodeName),
-		RAM:             c.Config.Topology.GetNodeRAM(nodeName),
+		CPUSet:          c.Config.Topology.GetNodeCPUSet(nodeName),
+		Memory:          c.Config.Topology.GetNodeMemory(nodeName),
 		StartupDelay:    c.Config.Topology.GetNodeStartupDelay(nodeName),
 
 		// Extras
@@ -285,13 +287,13 @@ func (c *CLab) createNodeCfg(nodeName string, nodeDef *types.NodeDefinition, idx
 // NewLink initializes a new link object
 func (c *CLab) NewLink(l *types.LinkConfig) *types.Link {
 	if len(l.Endpoints) != 2 {
-		log.Fatalf("endpoint %q has wrong syntax, unexpected number of items", l.Endpoints)
+		log.Fatalf("endpoint %q has wrong syntax, unexpected number of items", l.Endpoints) // skipcq: RVV-A0003
 	}
 
 	return &types.Link{
 		A:      c.NewEndpoint(l.Endpoints[0]),
 		B:      c.NewEndpoint(l.Endpoints[1]),
-		MTU:    defaultVethLinkMTU,
+		MTU:    DefaultVethLinkMTU,
 		Labels: l.Labels,
 		Vars:   l.Vars,
 	}
@@ -305,17 +307,17 @@ func (c *CLab) NewEndpoint(e string) *types.Endpoint {
 	// split the string to get node name and endpoint name
 	split := strings.Split(e, ":")
 	if len(split) != 2 {
-		log.Fatalf("endpoint %s has wrong syntax", e) // skipcq: GO-S0904
+		log.Fatalf("endpoint %s has wrong syntax", e) // skipcq: GO-S0904, RVV-A0003
 	}
 	nName := split[0] // node name
 
 	// initialize the endpoint name based on the split function
 	endpoint.EndpointName = split[1] // endpoint name
 	if len(endpoint.EndpointName) > 15 {
-		log.Fatalf("interface '%s' name exceeds maximum length of 15 characters", endpoint.EndpointName)
+		log.Fatalf("interface '%s' name exceeds maximum length of 15 characters", endpoint.EndpointName) //skipcq: RVV-A0003
 	}
 	// generate unique MAC
-	endpoint.MAC = utils.GenMac(clabOUI)
+	endpoint.MAC = utils.GenMac(ClabOUI)
 
 	// search the node pointer for a node name referenced in endpoint section
 	switch nName {
@@ -348,7 +350,7 @@ func (c *CLab) NewEndpoint(e string) *types.Endpoint {
 	// stop the deployment if the matching node element was not found
 	// "host" node name is an exception, it may exist without a matching node
 	if endpoint.Node == nil {
-		log.Fatalf("not all nodes are specified in the 'topology.nodes' section or the names don't match in the 'links.endpoints' section: %s", nName) // skipcq: GO-S0904
+		log.Fatalf("not all nodes are specified in the 'topology.nodes' section or the names don't match in the 'links.endpoints' section: %s", nName) // skipcq: GO-S0904, RVV-A0003
 	}
 
 	return endpoint
@@ -625,7 +627,7 @@ func resolveBindPaths(binds []string, nodedir string) error {
 }
 
 // CheckResources runs container host resources check
-func (c *CLab) CheckResources() error {
+func (*CLab) CheckResources() error {
 	vcpu := runtime.NumCPU()
 	log.Debugf("Number of vcpu: %d", vcpu)
 	if vcpu < 2 {

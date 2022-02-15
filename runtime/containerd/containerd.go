@@ -20,6 +20,7 @@ import (
 	"github.com/containernetworking/cni/libcni"
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/docker/go-units"
+	"github.com/dustin/go-humanize"
 	"github.com/google/shlex"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
@@ -93,10 +94,10 @@ func (c *ContainerdRuntime) WithMgmtNet(n *types.MgmtNet) {
 func (c *ContainerdRuntime) WithKeepMgmtNet() {
 	c.config.KeepMgmtNet = true
 }
-func (c *ContainerdRuntime) GetName() string               { return runtimeName }
+func (*ContainerdRuntime) GetName() string                 { return runtimeName }
 func (c *ContainerdRuntime) Config() runtime.RuntimeConfig { return c.config }
 
-func (c *ContainerdRuntime) CreateNet(ctx context.Context) error {
+func (*ContainerdRuntime) CreateNet(_ context.Context) error {
 	log.Debug("CreateNet() - Not needed with containerd")
 	return nil
 }
@@ -201,7 +202,19 @@ func (c *ContainerdRuntime) CreateContainer(ctx context.Context, node *types.Nod
 	if node.User != "" {
 		opts = append(opts, oci.WithUser(node.User))
 	}
-
+	if node.Memory != "" {
+		mem, err := humanize.ParseBytes(node.Memory)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, oci.WithMemoryLimit(mem))
+	}
+	if node.CPU != 0 {
+		opts = append(opts, oci.WithCPUCFS(int64(node.CPU*100000), 100000))
+	}
+	if node.CPUSet != "" {
+		opts = append(opts, oci.WithCPUs(node.CPUSet))
+	}
 	if len(mounts) > 0 {
 		opts = append(opts, oci.WithMounts(mounts))
 	}
@@ -232,8 +245,8 @@ func (c *ContainerdRuntime) CreateContainer(ctx context.Context, node *types.Nod
 		portmappings := []portMapping{}
 
 		for contdatasl, hostdata := range node.PortBindings {
-			//fmt.Printf("%+v", hostdata)
-			//fmt.Printf("%+v", contdatasl)
+			// fmt.Printf("%+v", hostdata)
+			// fmt.Printf("%+v", contdatasl)
 			for _, x := range hostdata {
 				hostport, err := strconv.Atoi(x.HostPort)
 				if err != nil {
@@ -380,8 +393,8 @@ func cniInit(cId, ifName string, mgmtNet *types.MgmtNet) (*libcni.CNIConfig, *li
 	cnirc := &libcni.RuntimeConf{
 		ContainerID: cId,
 		IfName:      ifName,
-		//// NetNS must be set later, can just be determined after container start
-		//NetNS:          node.NSPath,
+		// // NetNS must be set later, can just be determined after container start
+		// NetNS:          node.NSPath,
 		CapabilityArgs: make(map[string]interface{}),
 	}
 	return cnic, cncl, cnirc, nil
@@ -528,7 +541,7 @@ func (c *ContainerdRuntime) GetContainer(ctx context.Context, containerID string
 	return &ctrs[0], nil
 }
 
-func (c *ContainerdRuntime) buildFilterString(filter []*types.GenericFilter) string {
+func (*ContainerdRuntime) buildFilterString(filter []*types.GenericFilter) string {
 	filterstring := ""
 	delim := ","
 	for counter, filterEntry := range filter {
@@ -560,7 +573,7 @@ func (c *ContainerdRuntime) buildFilterString(filter []*types.GenericFilter) str
 }
 
 // Transform docker-specific to generic container format
-func (c *ContainerdRuntime) produceGenericContainerList(ctx context.Context, input []containerd.Container) ([]types.GenericContainer, error) {
+func (*ContainerdRuntime) produceGenericContainerList(ctx context.Context, input []containerd.Container) ([]types.GenericContainer, error) {
 	var result []types.GenericContainer
 
 	for _, i := range input {
@@ -621,26 +634,23 @@ func (c *ContainerdRuntime) produceGenericContainerList(ctx context.Context, inp
 	return result, nil
 }
 
-func extractIPInfoFromLabels(labels map[string]string) (*types.GenericMgmtIPs, error) {
+func extractIPInfoFromLabels(labels map[string]string) (types.GenericMgmtIPs, error) {
 	var ipv4mask int
 	var ipv6mask int
 	var err error
-	isSet := false
 	if val, exists := labels["clab.ipv4.netmask"]; exists {
-		isSet = true
 		ipv4mask, err = strconv.Atoi(val)
 		if err != nil {
-			return nil, err
+			return types.GenericMgmtIPs{}, err
 		}
 	}
 	if val, exists := labels["clab.ipv6.netmask"]; exists {
-		isSet = true
 		ipv6mask, err = strconv.Atoi(val)
 		if err != nil {
-			return nil, err
+			return types.GenericMgmtIPs{}, err
 		}
 	}
-	return &types.GenericMgmtIPs{Set: isSet, IPv4addr: labels["clab.ipv4.addr"], IPv4pLen: ipv4mask, IPv6addr: labels["clab.ipv6.addr"], IPv6pLen: ipv6mask}, nil
+	return types.GenericMgmtIPs{IPv4addr: labels["clab.ipv4.addr"], IPv4pLen: ipv4mask, IPv6addr: labels["clab.ipv6.addr"], IPv6pLen: ipv6mask}, nil
 }
 
 func timeSinceInHuman(since time.Time) string {
@@ -656,15 +666,15 @@ func (c *ContainerdRuntime) GetNSPath(ctx context.Context, containername string)
 	return "/proc/" + strconv.Itoa(int(task.Pid())) + "/ns/net", nil
 }
 func (c *ContainerdRuntime) Exec(ctx context.Context, containername string, cmd []string) ([]byte, []byte, error) {
-	return c.exec(ctx, containername, cmd, false)
+	return c.internalExec(ctx, containername, cmd, false)
 }
 
 func (c *ContainerdRuntime) ExecNotWait(ctx context.Context, containername string, cmd []string) error {
-	_, _, err := c.exec(ctx, containername, cmd, true)
+	_, _, err := c.internalExec(ctx, containername, cmd, true)
 	return err
 }
 
-func (c *ContainerdRuntime) exec(ctx context.Context, containername string, cmd []string, detach bool) ([]byte, []byte, error) {
+func (c *ContainerdRuntime) internalExec(ctx context.Context, containername string, cmd []string, detach bool) ([]byte, []byte, error) { //skipcq: RVV-A0005
 
 	clabExecId := "clabexec"
 	ctx = namespaces.WithNamespace(ctx, containerdNamespace)
@@ -705,7 +715,7 @@ func (c *ContainerdRuntime) exec(ctx context.Context, containername string, cmd 
 	}
 
 	process, err := task.Exec(ctx, clabExecId, pspec, ioCreator)
-	//task, err := container.NewTask(ctx, cio.NewCreator(cio_opt))
+	// task, err := container.NewTask(ctx, cio.NewCreator(cio_opt))
 	if err != nil {
 		return nil, nil, err
 	}

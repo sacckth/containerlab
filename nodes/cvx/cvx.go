@@ -53,14 +53,14 @@ func (c *cvx) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 		return fmt.Errorf("failed to parse OCI image ref %q: %s", cfg.Image, err)
 	}
 
-	// if RAM is not statically set, apply the defaults
-	if cfg.RAM == "" {
-		ram, ok := memoryReqs[ociRef.Ref().Tag()]
-		cfg.RAM = ram
+	// if Memory is not statically set, apply the defaults
+	if cfg.Memory == "" {
+		mem, ok := memoryReqs[ociRef.Ref().Tag()]
+		cfg.Memory = mem
 
 		// by default setting the limit to 768MB
 		if !ok {
-			cfg.RAM = "768MB"
+			cfg.Memory = "768MB"
 		}
 	}
 
@@ -69,7 +69,7 @@ func (c *cvx) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 
 func (c *cvx) Config() *types.NodeConfig { return c.cfg }
 
-func (c *cvx) PreDeploy(configName, labCADir, labCARoot string) error { return nil }
+func (*cvx) PreDeploy(_, _, _ string) error { return nil }
 
 func (c *cvx) Deploy(ctx context.Context) error {
 
@@ -85,7 +85,7 @@ func (c *cvx) Deploy(ctx context.Context) error {
 	return nil
 }
 
-func (c *cvx) PostDeploy(ctx context.Context, ns map[string]nodes.Node) error {
+func (c *cvx) PostDeploy(_ context.Context, _ map[string]nodes.Node) error {
 	log.Debugf("Running postdeploy actions for cvx '%s' node", c.cfg.ShortName)
 	if c.vmChans == nil {
 		return nil
@@ -107,7 +107,7 @@ func (c *cvx) GetImages() map[string]string {
 	return images
 }
 
-func (c *cvx) WithMgmtNet(*types.MgmtNet)             {}
+func (*cvx) WithMgmtNet(*types.MgmtNet)               {}
 func (c *cvx) WithRuntime(r runtime.ContainerRuntime) { c.runtime = r }
 
 func (c *cvx) Delete(ctx context.Context) error {
@@ -116,7 +116,7 @@ func (c *cvx) Delete(ctx context.Context) error {
 
 func (s *cvx) GetRuntime() runtime.ContainerRuntime { return s.runtime }
 
-func (c *cvx) SaveConfig(ctx context.Context) error {
+func (c *cvx) SaveConfig(_ context.Context) error {
 	log.Debugf("Save operation is currently not supported for %q node kind", c.cfg.Kind)
 	return nil
 }

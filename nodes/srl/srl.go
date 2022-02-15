@@ -31,7 +31,7 @@ import (
 const (
 	srlDefaultType = "ixrd2"
 
-	readyTimeout = time.Second * 30 // max wait time for node to boot
+	readyTimeout = time.Minute * 2 // max wait time for node to boot
 	retryTimer   = time.Second
 	// additional config that clab adds on top of the factory config
 	srlConfigCmdsTpl = `set / system tls server-profile clab-profile
@@ -47,6 +47,7 @@ set / system gnmi-server admin-state enable network-instance mgmt admin-state en
 set / system json-rpc-server admin-state enable network-instance mgmt http admin-state enable
 set / system json-rpc-server admin-state enable network-instance mgmt https admin-state enable tls-profile clab-profile
 set / system lldp admin-state enable
+set / system aaa authentication idle-timeout 7200
 commit save`
 )
 
@@ -185,7 +186,7 @@ func (s *srl) PreDeploy(configName, labCADir, labCARoot string) error {
 		for _, fullpath := range agents {
 			basename := filepath.Base(fullpath)
 			dst := filepath.Join(appmgr, basename)
-			if err := utils.CopyFile(fullpath, dst); err != nil {
+			if err := utils.CopyFile(fullpath, dst, 0644); err != nil {
 				return fmt.Errorf("agent copy src %s -> dst %s failed %v", fullpath, dst, err)
 			}
 		}
@@ -304,7 +305,7 @@ func createSRLFiles(nodeCfg *types.NodeConfig) error {
 		// copy license file to node specific directory in lab
 		src = nodeCfg.License
 		dst = filepath.Join(nodeCfg.LabDir, "license.key")
-		if err := utils.CopyFile(src, dst); err != nil {
+		if err := utils.CopyFile(src, dst, 0644); err != nil {
 			return fmt.Errorf("CopyFile src %s -> dst %s failed %v", src, dst, err)
 		}
 		log.Debugf("CopyFile src %s -> dst %s succeeded", src, dst)

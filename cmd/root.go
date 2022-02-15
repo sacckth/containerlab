@@ -19,6 +19,7 @@ var timeout time.Duration
 
 // path to the topology file
 var topo string
+var varsFile string
 var graph bool
 var rt string
 
@@ -41,7 +42,7 @@ var rootCmd = &cobra.Command{
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+		os.Exit(1) //skipcq: RVV-A0003
 	}
 }
 
@@ -49,13 +50,14 @@ func init() {
 	rootCmd.SilenceUsage = true
 	rootCmd.PersistentFlags().CountVarP(&debugCount, "debug", "d", "enable debug mode")
 	rootCmd.PersistentFlags().StringVarP(&topo, "topo", "t", "", "path to the file with topology information")
+	rootCmd.PersistentFlags().StringVarP(&varsFile, "vars", "", "", "path to the file with topology template variables")
 	_ = rootCmd.MarkPersistentFlagFilename("topo", "*.yaml", "*.yml")
 	rootCmd.PersistentFlags().StringVarP(&name, "name", "n", "", "lab name")
-	rootCmd.PersistentFlags().DurationVarP(&timeout, "timeout", "", 30*time.Second, "timeout for docker requests, e.g: 30s, 1m, 2m30s")
+	rootCmd.PersistentFlags().DurationVarP(&timeout, "timeout", "", 120*time.Second, "timeout for external API requests (e.g. container runtimes), e.g: 30s, 1m, 2m30s")
 	rootCmd.PersistentFlags().StringVarP(&rt, "runtime", "r", "", "container runtime")
 }
 
-func sudoCheck(cmd *cobra.Command, args []string) error {
+func sudoCheck(_ *cobra.Command, _ []string) error {
 	id := os.Geteuid()
 	if id != 0 {
 		return errors.New("containerlab requires sudo privileges to run")

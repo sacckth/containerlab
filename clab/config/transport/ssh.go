@@ -188,7 +188,7 @@ func (t *SSHTransport) Run(command string, timeout int) *SSHReply {
 			}
 
 			if ret.result == "" && ret.prompt == "" {
-				log.Fatalf("received zero?")
+				log.Error("received zero?")
 				continue
 			}
 
@@ -272,7 +272,7 @@ func (t *SSHTransport) Write(data, info *string) error {
 
 // Connect to a host
 // Part of the Transport interface
-func (t *SSHTransport) Connect(host string, options ...TransportOption) error {
+func (t *SSHTransport) Connect(host string, _ ...TransportOption) error {
 	// Assign Default Values
 	if t.PromptChar == "" {
 		t.PromptChar = "#"
@@ -344,7 +344,7 @@ func NewSSHSession(host string, sshConfig *ssh.ClientConfig) (*SSHSession, error
 	modes := ssh.TerminalModes{
 		ssh.ECHO: 1, // disable echo
 	}
-	err = session.RequestPty("dumb", 24, 100, modes)
+	err = session.RequestPty("dumb", 24, 1000, modes)
 	if err != nil {
 		session.Close()
 		return nil, fmt.Errorf("pty request failed: %s", err)
@@ -376,7 +376,7 @@ func (ses *SSHSession) Close() {
 //   # - command sent
 //   | - result received
 //   ? - prompt part of the result
-func (r *SSHReply) LogString(node string, linefeed, debug bool) string {
+func (r *SSHReply) LogString(node string, linefeed, debug bool) string { //skipcq: RVV-A0005
 	ind := 12 + len(node)
 	prefix := "\n" + strings.Repeat(" ", ind)
 	s := ""

@@ -59,7 +59,7 @@ func (s *crpd) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 }
 func (s *crpd) Config() *types.NodeConfig { return s.cfg }
 
-func (s *crpd) PreDeploy(configName, labCADir, labCARoot string) error {
+func (s *crpd) PreDeploy(_, _, _ string) error {
 	utils.CreateDirectory(s.cfg.LabDir, 0777)
 	return createCRPDFiles(s.cfg)
 }
@@ -69,7 +69,7 @@ func (s *crpd) Deploy(ctx context.Context) error {
 	return err
 }
 
-func (s *crpd) PostDeploy(ctx context.Context, ns map[string]nodes.Node) error {
+func (s *crpd) PostDeploy(ctx context.Context, _ map[string]nodes.Node) error {
 	log.Debugf("Running postdeploy actions for CRPD %q node", s.cfg.ShortName)
 	_, stderr, err := s.runtime.Exec(ctx, s.cfg.ContainerID, []string{"service", "ssh", "restart"})
 	if err != nil {
@@ -89,7 +89,7 @@ func (s *crpd) GetImages() map[string]string {
 	}
 }
 
-func (s *crpd) WithMgmtNet(*types.MgmtNet)             {}
+func (*crpd) WithMgmtNet(*types.MgmtNet)               {}
 func (s *crpd) WithRuntime(r runtime.ContainerRuntime) { s.runtime = r }
 func (s *crpd) GetRuntime() runtime.ContainerRuntime   { return s.runtime }
 
@@ -152,8 +152,8 @@ func createCRPDFiles(nodeCfg *types.NodeConfig) error {
 	if nodeCfg.License != "" {
 		// copy license file to node specific lab directory
 		src := nodeCfg.License
-		dst = filepath.Join(nodeCfg.LabDir, "/config/license.conf")
-		if err = utils.CopyFile(src, dst); err != nil {
+		dst = filepath.Join(nodeCfg.LabDir, "/config/license/safenet/junos_sfnt.lic")
+		if err = utils.CopyFile(src, dst, 0644); err != nil {
 			return fmt.Errorf("file copy [src %s -> dst %s] failed %v", src, dst, err)
 		}
 		log.Debugf("CopyFile src %s -> dst %s succeeded", src, dst)

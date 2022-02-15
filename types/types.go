@@ -92,7 +92,7 @@ type NodeConfig struct {
 	TLSKey               string
 	TLSAnchor            string
 	NSPath               string   // network namespace path for this node
-	Publish              []string //list of ports to publish with mysocketctl
+	Publish              []string // list of ports to publish with mysocketctl
 	ExtraHosts           []string // Extra /etc/hosts entries for all nodes
 	// container labels
 	Labels map[string]string
@@ -103,7 +103,10 @@ type NodeConfig struct {
 	// Configured container runtime
 	Runtime string
 	// Resource requirements
-	CPU, RAM         string
+	CPU    float64
+	CPUSet string
+	Memory string
+
 	DeploymentStatus string // status that is set by containerlab to indicate deployment stage
 
 	// Extras
@@ -174,11 +177,10 @@ type GenericContainer struct {
 	Status          string
 	Labels          map[string]string
 	Pid             int
-	NetworkSettings *GenericMgmtIPs
+	NetworkSettings GenericMgmtIPs
 }
 
 type GenericMgmtIPs struct {
-	Set      bool
 	IPv4addr string
 	IPv4pLen int
 	IPv6addr string
@@ -234,5 +236,6 @@ func (cd *ConfigDispatcher) GetVars() map[string]interface{} {
 
 // Extras contains extra node parameters which are not entitled to be part of a generic node config
 type Extras struct {
-	SRLAgents []string `yaml:"srl-agents,omitempty"` // Nokia SR Linux agents. As of now just the agents spec files can be provided here
+	SRLAgents     []string `yaml:"srl-agents,omitempty"`     // Nokia SR Linux agents. As of now just the agents spec files can be provided here
+	MysocketProxy string   `yaml:"mysocket-proxy,omitempty"` // Proxy address that mysocketctl will use
 }

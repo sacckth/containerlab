@@ -27,9 +27,15 @@ Deploy ${lab-name} lab
     ...    sudo containerlab --runtime ${runtime} deploy -t ${CURDIR}/01-linux-nodes.clab.yml
     Log    ${output}
     Should Be Equal As Integers    ${rc}    0
+    # save output to be used in next steps
+    Set Suite Variable    ${deploy-output}    ${output}
+
+Ensure exec command works
+    [Documentation]    This tests ensures that the node's exec property that sets commands to be executed upon node deployment works. NOTE that containerd runtime is excluded because it often doesn't have one of the exec commands. To be investigated further.
+    Skip If    '${runtime}' != 'docker'
     # ensure exec commands work
-    Should Contain    ${output}    this_is_an_exec_test
-    Should Contain    ${output}    ID=alpine
+    Should Contain    ${deploy-output}    this_is_an_exec_test
+    Should Contain    ${deploy-output}    ID=alpine
 
 Inspect ${lab-name} lab
     ${rc}    ${output} =    Run And Return Rc And Output
@@ -123,6 +129,17 @@ Verify Hosts entries exist
     Log    ${output}
     Should Be Equal As Integers    ${rc}    0
     Should Contain    ${output}    6
+
+Verify Mem and CPU limits are set
+    [Documentation]    Checking if cpu and memory limits set for a node has been reflected in the host config
+    Skip If    '${runtime}' != 'docker'
+    ${rc}    ${output} =    Run And Return Rc And Output
+    ...    docker inspect clab-${lab-name}-l1 -f '{{.HostConfig.Memory}} {{.HostConfig.CpuQuota}}'
+    Log    ${output}
+    # cpu=1.5
+    Should Contain    ${output}    150000
+    # memory=1G
+    Should Contain    ${output}    1000000000
 
 Destroy ${lab-name} lab
     ${rc}    ${output} =    Run And Return Rc And Output

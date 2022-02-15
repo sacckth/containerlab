@@ -80,7 +80,7 @@ var signCertCmd = &cobra.Command{
 	RunE:  signCert,
 }
 
-func createCA(cmd *cobra.Command, args []string) error {
+func createCA(_ *cobra.Command, _ []string) error {
 	csr := `{
 	"CN": "{{.CommonName}}",
 	"key": {
@@ -147,7 +147,7 @@ func createCA(cmd *cobra.Command, args []string) error {
 }
 
 // create node certificate and sign it with CA
-func signCert(cmd *cobra.Command, args []string) error {
+func signCert(_ *cobra.Command, _ []string) error {
 	csr := `{
 		"CN": "{{.CommonName}}",
 		"hosts": [
@@ -175,6 +175,14 @@ func signCert(cmd *cobra.Command, args []string) error {
 		cfssllog.Level = cfssllog.LevelDebug
 	}
 
+	// Check that CA path/key is set
+	if caCertPath == "" {
+		return fmt.Errorf("CA cert path not set")
+	}
+	if caKeyPath == "" {
+		return fmt.Errorf("CA key path not set")
+	}
+	
 	if path == "" {
 		path, err = os.Getwd()
 		if err != nil {

@@ -5,9 +5,9 @@
 package cmd
 
 import (
+	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,18 +15,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var downloadURL = "https://github.com/srl-labs/containerlab/raw/master/get.sh"
+var downloadURL = "https://github.com/srl-labs/containerlab/raw/main/get.sh"
 
 // upgradeCmd represents the version command
 var upgradeCmd = &cobra.Command{
 	Use:     "upgrade",
 	Short:   "upgrade containerlab to latest available version",
 	PreRunE: sudoCheck,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		f, err := ioutil.TempFile("", "containerlab")
 		defer os.Remove(f.Name())
 		if err != nil {
-			log.Fatalf("Failed to create temp file %s\n", err)
+			return fmt.Errorf("failed to create temp file: %w", err)
 		}
 		_ = downloadFile(downloadURL, f)
 
@@ -36,8 +36,10 @@ var upgradeCmd = &cobra.Command{
 		c.Stderr = os.Stderr
 		err = c.Run()
 		if err != nil {
-			log.Fatalf("Upgrade failed: %s\n", err)
+			return fmt.Errorf("upgrade failed: %w", err)
 		}
+
+		return nil
 	},
 }
 
@@ -55,6 +57,7 @@ func downloadFile(url string, file *os.File) error {
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 

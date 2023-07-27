@@ -7,101 +7,99 @@ package vr_xrv9k
 import (
 	"context"
 	"fmt"
+	"path"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/srl-labs/containerlab/netconf"
 	"github.com/srl-labs/containerlab/nodes"
-	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/types"
 	"github.com/srl-labs/containerlab/utils"
 )
 
-const (
-	scrapliPlatformName = "cisco_iosxr"
+var (
+	kindnames          = []string{"vr-xrv9k", "vr-cisco_xrv9k"}
+	defaultCredentials = nodes.NewCredentials("clab", "clab@123")
 )
 
-func init() {
-	nodes.Register(nodes.NodeKindVrXRV9K, func() nodes.Node {
+const (
+	scrapliPlatformName = "cisco_iosxr"
+
+	configDirName   = "config"
+	startupCfgFName = "startup-config.cfg"
+)
+
+// Register registers the node in the NodeRegistry.
+func Register(r *nodes.NodeRegistry) {
+	r.Register(kindnames, func() nodes.Node {
 		return new(vrXRV9K)
-	})
+	}, defaultCredentials)
 }
 
 type vrXRV9K struct {
-	cfg     *types.NodeConfig
-	mgmt    *types.MgmtNet
-	runtime runtime.ContainerRuntime
+	nodes.DefaultNode
 }
 
-func (s *vrXRV9K) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
-	s.cfg = cfg
+func (n *vrXRV9K) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
+	// Init DefaultNode
+	n.DefaultNode = *nodes.NewDefaultNode(n)
+	// set virtualization requirement
+	n.HostRequirements.VirtRequired = true
+
+	n.Cfg = cfg
 	for _, o := range opts {
-		o(s)
+		o(n)
 	}
 	// env vars are used to set launch.py arguments in vrnetlab container
 	defEnv := map[string]string{
-		"USERNAME":           "clab",
-		"PASSWORD":           "clab@123",
+		"USERNAME":           defaultCredentials.GetUsername(),
+		"PASSWORD":           defaultCredentials.GetPassword(),
 		"CONNECTION_MODE":    nodes.VrDefConnMode,
 		"VCPU":               "2",
 		"RAM":                "12288",
-		"DOCKER_NET_V4_ADDR": s.mgmt.IPv4Subnet,
-		"DOCKER_NET_V6_ADDR": s.mgmt.IPv6Subnet,
+		"DOCKER_NET_V4_ADDR": n.Mgmt.IPv4Subnet,
+		"DOCKER_NET_V6_ADDR": n.Mgmt.IPv6Subnet,
 	}
-	s.cfg.Env = utils.MergeStringMaps(defEnv, s.cfg.Env)
+	n.Cfg.Env = utils.MergeStringMaps(defEnv, n.Cfg.Env)
 
-	if s.cfg.Env["CONNECTION_MODE"] == "macvtap" {
+	// mount config dir to support startup-config functionality
+	n.Cfg.Binds = append(n.Cfg.Binds, fmt.Sprint(path.Join(n.Cfg.LabDir, configDirName), ":/config"))
+
+	if n.Cfg.Env["CONNECTION_MODE"] == "macvtap" {
 		// mount dev dir to enable macvtap
-		s.cfg.Binds = append(s.cfg.Binds, "/dev:/dev")
+		n.Cfg.Binds = append(n.Cfg.Binds, "/dev:/dev")
 	}
 
-	s.cfg.Cmd = fmt.Sprintf("--username %s --password %s --hostname %s --connection-mode %s --vcpu %s --ram %s --trace",
-		s.cfg.Env["USERNAME"], s.cfg.Env["PASSWORD"], s.cfg.ShortName, s.cfg.Env["CONNECTION_MODE"], s.cfg.Env["VCPU"], s.cfg.Env["RAM"])
+	n.Cfg.Cmd = fmt.Sprintf("--username %s --password %s --hostname %s --connection-mode %s --vcpu %s --ram %s --trace",
+		defaultCredentials.GetUsername(), defaultCredentials.GetPassword(), n.Cfg.ShortName,
+		n.Cfg.Env["CONNECTION_MODE"], n.Cfg.Env["VCPU"], n.Cfg.Env["RAM"])
 
 	return nil
 }
 
-func (s *vrXRV9K) Config() *types.NodeConfig { return s.cfg }
-
-func (s *vrXRV9K) PreDeploy(_, _, _ string) error {
-	utils.CreateDirectory(s.cfg.LabDir, 0777)
-	return nil
-}
-
-func (s *vrXRV9K) Deploy(ctx context.Context) error {
-	_, err := s.runtime.CreateContainer(ctx, s.cfg)
-	return err
-}
-
-func (s *vrXRV9K) GetImages() map[string]string {
-	return map[string]string{
-		nodes.ImageKey: s.cfg.Image,
+func (n *vrXRV9K) PreDeploy(_ context.Context, params *nodes.PreDeployParams) error {
+	utils.CreateDirectory(n.Cfg.LabDir, 0777)
+	_, err := n.LoadOrGenerateCertificate(params.Cert, params.TopologyName)
+	if err != nil {
+		return nil
 	}
+	return nodes.LoadStartupConfigFileVr(n, configDirName, startupCfgFName)
 }
 
-func (*vrXRV9K) PostDeploy(_ context.Context, _ map[string]nodes.Node) error {
-	return nil
-}
-
-func (s *vrXRV9K) WithMgmtNet(mgmt *types.MgmtNet) { s.mgmt = mgmt }
-func (s *vrXRV9K) WithRuntime(r runtime.ContainerRuntime) {
-	s.runtime = r
-}
-func (s *vrXRV9K) GetRuntime() runtime.ContainerRuntime { return s.runtime }
-
-func (s *vrXRV9K) Delete(ctx context.Context) error {
-	return s.runtime.DeleteContainer(ctx, s.Config().LongName)
-}
-
-func (s *vrXRV9K) SaveConfig(_ context.Context) error {
-	err := utils.SaveCfgViaNetconf(s.cfg.LongName,
-		nodes.DefaultCredentials[s.cfg.Kind][0],
-		nodes.DefaultCredentials[s.cfg.Kind][1],
+func (n *vrXRV9K) SaveConfig(_ context.Context) error {
+	err := netconf.SaveConfig(n.Cfg.LongName,
+		defaultCredentials.GetUsername(),
+		defaultCredentials.GetPassword(),
 		scrapliPlatformName,
 	)
-
 	if err != nil {
 		return err
 	}
 
-	log.Infof("saved %s running configuration to startup configuration file\n", s.cfg.ShortName)
+	log.Infof("saved %s running configuration to startup configuration file\n", n.Cfg.ShortName)
 	return nil
+}
+
+// CheckInterfaceName checks if a name of the interface referenced in the topology file correct.
+func (n *vrXRV9K) CheckInterfaceName() error {
+	return nodes.GenericVMInterfaceCheck(n.Cfg.ShortName, n.Cfg.Endpoints)
 }

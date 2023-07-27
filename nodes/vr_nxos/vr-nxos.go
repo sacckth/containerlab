@@ -7,80 +7,75 @@ package vr_nxos
 import (
 	"context"
 	"fmt"
+	"path"
 
 	"github.com/srl-labs/containerlab/nodes"
-	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/types"
 	"github.com/srl-labs/containerlab/utils"
 )
 
-func init() {
-	nodes.Register(nodes.NodeKindVrNXOS, func() nodes.Node {
+var (
+	kindnames          = []string{"vr-nxos", "vr-cisco_nxos"}
+	defaultCredentials = nodes.NewCredentials("admin", "admin")
+)
+
+const (
+	configDirName   = "config"
+	startupCfgFName = "startup-config.cfg"
+)
+
+// Register registers the node in the NodeRegistry.
+func Register(r *nodes.NodeRegistry) {
+	r.Register(kindnames, func() nodes.Node {
 		return new(vrNXOS)
-	})
+	}, defaultCredentials)
 }
 
 type vrNXOS struct {
-	cfg     *types.NodeConfig
-	mgmt    *types.MgmtNet
-	runtime runtime.ContainerRuntime
+	nodes.DefaultNode
 }
 
-func (s *vrNXOS) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
-	s.cfg = cfg
+func (n *vrNXOS) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
+	// Init DefaultNode
+	n.DefaultNode = *nodes.NewDefaultNode(n)
+	// set virtualization requirement
+	n.HostRequirements.VirtRequired = true
+
+	n.Cfg = cfg
 	for _, o := range opts {
-		o(s)
+		o(n)
 	}
 	// env vars are used to set launch.py arguments in vrnetlab container
 	defEnv := map[string]string{
-		"USERNAME":           "admin",
-		"PASSWORD":           "admin",
+		"USERNAME":           defaultCredentials.GetUsername(),
+		"PASSWORD":           defaultCredentials.GetPassword(),
 		"CONNECTION_MODE":    nodes.VrDefConnMode,
 		"VCPU":               "2",
 		"RAM":                "4096",
-		"DOCKER_NET_V4_ADDR": s.mgmt.IPv4Subnet,
-		"DOCKER_NET_V6_ADDR": s.mgmt.IPv6Subnet,
+		"DOCKER_NET_V4_ADDR": n.Mgmt.IPv4Subnet,
+		"DOCKER_NET_V6_ADDR": n.Mgmt.IPv6Subnet,
 	}
-	s.cfg.Env = utils.MergeStringMaps(defEnv, s.cfg.Env)
+	n.Cfg.Env = utils.MergeStringMaps(defEnv, n.Cfg.Env)
 
-	s.cfg.Cmd = fmt.Sprintf("--username %s --password %s --hostname %s --connection-mode %s --trace",
-		s.cfg.Env["USERNAME"], s.cfg.Env["PASSWORD"], s.cfg.ShortName, s.cfg.Env["CONNECTION_MODE"])
+	// mount config dir to support startup-config functionality
+	n.Cfg.Binds = append(n.Cfg.Binds, fmt.Sprint(path.Join(n.Cfg.LabDir, configDirName), ":/config"))
+
+	n.Cfg.Cmd = fmt.Sprintf("--username %s --password %s --hostname %s --connection-mode %s --trace",
+		defaultCredentials.GetUsername(), defaultCredentials.GetPassword(), n.Cfg.ShortName, n.Cfg.Env["CONNECTION_MODE"])
 
 	return nil
 }
 
-func (s *vrNXOS) Config() *types.NodeConfig { return s.cfg }
-
-func (s *vrNXOS) PreDeploy(_, _, _ string) error {
-	utils.CreateDirectory(s.cfg.LabDir, 0777)
-	return nil
-}
-
-func (s *vrNXOS) Deploy(ctx context.Context) error {
-	_, err := s.runtime.CreateContainer(ctx, s.cfg)
-	return err
-}
-
-func (s *vrNXOS) GetImages() map[string]string {
-	return map[string]string{
-		nodes.ImageKey: s.cfg.Image,
+func (n *vrNXOS) PreDeploy(_ context.Context, params *nodes.PreDeployParams) error {
+	utils.CreateDirectory(n.Cfg.LabDir, 0777)
+	_, err := n.LoadOrGenerateCertificate(params.Cert, params.TopologyName)
+	if err != nil {
+		return nil
 	}
+	return nodes.LoadStartupConfigFileVr(n, configDirName, startupCfgFName)
 }
 
-func (*vrNXOS) PostDeploy(_ context.Context, _ map[string]nodes.Node) error {
-	return nil
-}
-
-func (s *vrNXOS) WithMgmtNet(mgmt *types.MgmtNet) { s.mgmt = mgmt }
-func (s *vrNXOS) WithRuntime(r runtime.ContainerRuntime) {
-	s.runtime = r
-}
-func (s *vrNXOS) GetRuntime() runtime.ContainerRuntime { return s.runtime }
-
-func (s *vrNXOS) Delete(ctx context.Context) error {
-	return s.runtime.DeleteContainer(ctx, s.Config().LongName)
-}
-
-func (*vrNXOS) SaveConfig(_ context.Context) error {
-	return nil
+// CheckInterfaceName checks if a name of the interface referenced in the topology file correct.
+func (n *vrNXOS) CheckInterfaceName() error {
+	return nodes.GenericVMInterfaceCheck(n.Cfg.ShortName, n.Cfg.Endpoints)
 }

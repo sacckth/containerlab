@@ -11,9 +11,8 @@ rpm/*
 dist
 private
 clab-*
-clab/.*.yaml
-clab/.*.yml
 
+tmp/
 # Test binary, built with `go test -c`
 *.test
 
@@ -35,4 +34,8 @@ site/
 .DS_Store
 __rd*
 tests/out
+**/.*clab.y?ml
 
+# ignore clab backup topo files in test directories
+clab/test_data/*.bak
+tests/**/*.bak

@@ -7,11 +7,13 @@ package cmd
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	gover "github.com/hashicorp/go-version"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"golang.org/x/net/context"
 )
 
 var (
@@ -37,7 +39,7 @@ var slug = `
 \____)___/|_| |_|\___)_||_|_|_| |_|\____)_|   |_|\_||_|____/ 
 `
 
-// versionCmd represents the version command
+// versionCmd represents the version command.
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "show containerlab version or upgrade",
@@ -49,23 +51,31 @@ var versionCmd = &cobra.Command{
 		fmt.Printf("     commit: %s\n", commit)
 		fmt.Printf("       date: %s\n", date)
 		fmt.Printf("     source: %s\n", repoUrl)
-		fmt.Printf(" rel. notes: https://containerlab.srlinux.dev/rn/%s\n", verSlug)
+		fmt.Printf(" rel. notes: https://containerlab.dev/rn/%s\n", verSlug)
 	},
 }
 
-// get LatestVersion fetches latest containerlab release version from Github releases
-func getLatestVersion(vc chan string) { //skipcq: RVV-A0006
+// get LatestVersion fetches latest containerlab release version from Github releases.
+func getLatestVersion(ctx context.Context, vc chan string) { // skipcq: RVV-A0006
 	// client that doesn't follow redirects
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
-		}}
-	resp, err := client.Head(fmt.Sprintf("%s/releases/latest", repoUrl))
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "HEAD",
+		fmt.Sprintf("%s/releases/latest", repoUrl), nil)
+	if err != nil {
+		log.Debugf("error occurred during latest version fetch: %v", err)
+		return
+	}
+
+	resp, err := client.Do(req)
 	if err != nil || resp.StatusCode != 302 {
 		log.Debugf("error occurred during latest version fetch: %v", err)
 		return
 	}
-	defer resp.Body.Close()
 
 	loc := resp.Header.Get("Location")
 	split := strings.Split(loc, "releases/tag/")
@@ -79,15 +89,17 @@ func getLatestVersion(vc chan string) { //skipcq: RVV-A0006
 		log.Debugf("latest version %s is newer than the current one %s\n", vL.String(), vC.String())
 		vc <- vL.String()
 	}
+
+	resp.Body.Close()
 }
 
-// newVerNotification prints logs information about a new version if one was found
+// newVerNotification prints logs information about a new version if one was found.
 func newVerNotification(vc chan string) {
 	select {
 	case ver, ok := <-vc:
 		if ok {
 			relSlug := docsLinkFromVer(ver)
-			log.Infof("🎉 New containerlab version %s is available! Release notes: https://containerlab.srlinux.dev/rn/%s\nRun 'containerlab version upgrade' to upgrade or go check other installation options at https://containerlab.srlinux.dev/install/\n", ver, relSlug)
+			log.Infof("🎉 New containerlab version %s is available! Release notes: https://containerlab.dev/rn/%s\nRun 'containerlab version upgrade' to upgrade or go check other installation options at https://containerlab.dev/install/\n", ver, relSlug)
 		}
 	default:
 		return
@@ -96,7 +108,7 @@ func newVerNotification(vc chan string) {
 
 // docsLinkFromVer creates a documentation path attribute for a given version
 // for 0.15.0 version, the it returns 0.15/
-// for 0.15.1 - 0.15/#0151
+// for 0.15.1 - 0.15/#0151.
 func docsLinkFromVer(ver string) string {
 	v, _ := gover.NewVersion(ver)
 	segments := v.Segments()
@@ -109,4 +121,23 @@ func docsLinkFromVer(ver string) string {
 		relSlug = relSlug + fmt.Sprintf("#%d%d%d", maj, min, patch)
 	}
 	return relSlug
+}
+
+// getLatestClabVersion returns a chan that returns the version check result
+// uses the CLAB_VERSION_CHECK env variable (default true, if == "disable" will not perform the check).
+func getLatestClabVersion(ctx context.Context) chan string {
+	// latest version channel
+	vCh := make(chan string)
+
+	// check if new_version_notification is meant to be disabled
+	versionCheckStatus := os.Getenv("CLAB_VERSION_CHECK")
+	log.Debugf("Env: CLAB_VERSION_CHECK=%s", versionCheckStatus)
+
+	if strings.Contains(strings.ToLower(versionCheckStatus), "disable") {
+		close(vCh)
+	} else {
+		go getLatestVersion(ctx, vCh)
+	}
+
+	return vCh
 }

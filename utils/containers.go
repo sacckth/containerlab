@@ -1,7 +1,10 @@
 package utils
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -9,15 +12,14 @@ const (
 	cniBin = "/opt/cni/bin"
 )
 
-// produces a canonical image name.
-// returns the canonical image name including the tag
+// GetCanonicalImageName produces a canonical image name.
 // if the input name did not specify a tag, the implicit "latest" tag is returned.
 func GetCanonicalImageName(imageName string) string {
-	// might need canonical name e.g.
-	//    -> alpine == docker.io/library/alpine
-	//    -> foo/bar == docker.io/foo/bar
-	//    -> foo.bar/baz == foo.bar/bar
-	//    -> docker.elastic.co/elasticsearch/elasticsearch == docker.elastic.co/elasticsearch/elasticsearch
+	// name transformation rules
+	//    alpine == docker.io/library/alpine:latest
+	//    foo/bar == docker.io/foo/bar:latest
+	//    foo.bar/baz == foo.bar/bar:latest
+	//    docker.elastic.co/elasticsearch/elasticsearch == docker.elastic.co/elasticsearch/elasticsearch:latest
 	canonicalImageName := imageName
 	slashCount := strings.Count(imageName, "/")
 
@@ -49,4 +51,22 @@ func GetCNIBinaryPath() string {
 		cniPath = cniBin
 	}
 	return cniPath
+}
+
+// ContainerNSToPID resolves the name of a container via
+// the "/run/netns/<CONTAINERNAME>" to its PID.
+func ContainerNSToPID(cID string) (int, error) {
+	pnns, err := filepath.EvalSymlinks("/run/netns/" + cID)
+	if err != nil {
+		return 0, err
+	}
+	pathElem := strings.Split(pnns, "/")
+	if len(pathElem) != 4 {
+		return 0, fmt.Errorf("unexpected result looking up container PID")
+	}
+	pid, err := strconv.Atoi(pathElem[1])
+	if err != nil {
+		return 0, fmt.Errorf("error converting the string part of the namespace link to int")
+	}
+	return pid, nil
 }

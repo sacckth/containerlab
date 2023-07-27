@@ -1,20 +1,16 @@
 package types
 
 import (
-	"os"
-	"path/filepath"
-
 	"github.com/docker/go-connections/nat"
-	"github.com/mitchellh/go-homedir"
 	"github.com/srl-labs/containerlab/utils"
 )
 
-// Topology represents a lab topology
+// Topology represents a lab topology.
 type Topology struct {
 	Defaults *NodeDefinition            `yaml:"defaults,omitempty"`
 	Kinds    map[string]*NodeDefinition `yaml:"kinds,omitempty"`
 	Nodes    map[string]*NodeDefinition `yaml:"nodes,omitempty"`
-	Links    []*LinkConfig              `yaml:"links,omitempty"`
+	Links    []*LinkDefinition          `yaml:"links,omitempty"`
 }
 
 func NewTopology() *Topology {
@@ -22,7 +18,7 @@ func NewTopology() *Topology {
 		Defaults: new(NodeDefinition),
 		Kinds:    make(map[string]*NodeDefinition),
 		Nodes:    make(map[string]*NodeDefinition),
-		Links:    make([]*LinkConfig, 0),
+		Links:    make([]*LinkDefinition, 0),
 	}
 }
 
@@ -30,6 +26,7 @@ type LinkConfig struct {
 	Endpoints []string
 	Labels    map[string]string      `yaml:"labels,omitempty"`
 	Vars      map[string]interface{} `yaml:"vars,omitempty"`
+	MTU       int                    `yaml:"mtu,omitempty"`
 }
 
 func (t *Topology) GetDefaults() *NodeDefinition {
@@ -69,17 +66,42 @@ func (t *Topology) GetNodeKind(name string) string {
 	return ""
 }
 
-func (t *Topology) GetNodeBinds(name string) []string {
-	if ndef, ok := t.Nodes[name]; ok {
-		if len(ndef.GetBinds()) > 0 {
-			return ndef.GetBinds()
-		}
-		if len(t.GetKind(t.GetNodeKind(name)).GetBinds()) > 0 {
-			return t.GetKind(t.GetNodeKind(name)).GetBinds()
-		}
-		return t.GetDefaults().GetBinds()
+func (t *Topology) GetNodeBinds(name string) ([]string, error) {
+	if _, ok := t.Nodes[name]; !ok {
+		return nil, nil
 	}
-	return nil
+
+	binds := map[string]*Bind{}
+
+	// group the default, kind and node binds
+	bindSources := [][]string{t.GetDefaults().GetBinds(), t.GetKind(t.GetNodeKind(name)).GetBinds(), t.Nodes[name].GetBinds()}
+
+	// add the binds from less to more specific levels, indexed by the destination path.
+	// thereby more specific binds will overwrite less specific one
+	for _, bs := range bindSources {
+		for _, bind := range bs {
+			b, err := NewBind(bind)
+			if err != nil {
+				return nil, err
+			}
+
+			binds[b.Dst()] = b
+		}
+	}
+
+	// in order to return nil instead of empty array when no binds are defined
+	if len(binds) == 0 {
+		return nil, nil
+	}
+
+	// build the result array with all the entries from binds map
+	result := make([]string, 0, len(binds))
+
+	for _, b := range binds {
+		result = append(result, b.String())
+	}
+
+	return result, nil
 }
 
 func (t *Topology) GetNodePorts(name string) (nat.PortSet, nat.PortMap, error) {
@@ -106,6 +128,16 @@ func (t *Topology) GetNodeEnv(name string) map[string]string {
 			utils.MergeStringMaps(t.GetDefaults().GetEnv(),
 				t.GetKind(t.GetNodeKind(name)).GetEnv()),
 			ndef.GetEnv())
+	}
+	return nil
+}
+
+func (t *Topology) GetNodeEnvFiles(name string) []string {
+	if ndef, ok := t.Nodes[name]; ok {
+		return utils.MergeStringSlices(
+			utils.MergeStringSlices(t.GetDefaults().GetEnvFiles(),
+				t.GetKind(t.GetNodeKind(name)).GetEnvFiles()),
+			ndef.GetEnvFiles())
 	}
 	return nil
 }
@@ -151,21 +183,12 @@ func (t *Topology) GetNodeConfigDispatcher(name string) *ConfigDispatcher {
 func (t *Topology) GetNodeStartupConfig(name string) (string, error) {
 	var cfg string
 	if ndef, ok := t.Nodes[name]; ok {
-		var err error
 		cfg = ndef.GetStartupConfig()
 		if t.GetKind(t.GetNodeKind(name)).GetStartupConfig() != "" && cfg == "" {
 			cfg = t.GetKind(t.GetNodeKind(name)).GetStartupConfig()
 		}
 		if cfg == "" {
 			cfg = t.GetDefaults().GetStartupConfig()
-		}
-		if cfg != "" {
-			cfg, err = resolvePath(cfg)
-			if err != nil {
-				return "", err
-			}
-			_, err = os.Stat(cfg)
-			return cfg, err
 		}
 	}
 	return cfg, nil
@@ -197,26 +220,39 @@ func (t *Topology) GetNodeEnforceStartupConfig(name string) bool {
 	return false
 }
 
+func (t *Topology) GetNodeAutoRemove(name string) *bool {
+	if ndef, ok := t.Nodes[name]; ok {
+		if ndef.GetAutoRemove() != nil {
+			return ndef.AutoRemove
+		}
+		if t.GetKind(t.GetNodeKind(name)).GetAutoRemove() != nil {
+			return t.GetKind(t.GetNodeKind(name)).GetAutoRemove()
+		}
+	}
+
+	if t.GetDefaults().GetAutoRemove() != nil {
+		return t.GetDefaults().GetAutoRemove()
+	}
+
+	def := false
+	return &def
+}
+
 func (t *Topology) GetNodeLicense(name string) (string, error) {
 	var license string
 	if ndef, ok := t.Nodes[name]; ok {
-		var err error
+
 		license = ndef.GetLicense()
 		if t.GetKind(t.GetNodeKind(name)).GetLicense() != "" && license == "" {
 			license = t.GetKind(t.GetNodeKind(name)).GetLicense()
 		}
+
 		if license == "" {
 			license = t.GetDefaults().GetLicense()
 		}
-		if license != "" {
-			license, err = resolvePath(license)
-			if err != nil {
-				return "", err
-			}
-			_, err = os.Stat(license)
-			return license, err
-		}
+
 	}
+
 	return license, nil
 }
 
@@ -231,6 +267,22 @@ func (t *Topology) GetNodeImage(name string) string {
 		return t.GetDefaults().GetImage()
 	}
 	return ""
+}
+
+func (t *Topology) GetNodeImagePullPolicy(name string) PullPolicyValue {
+	if ndef, ok := t.Nodes[name]; ok {
+		if pp := ndef.GetImagePullPolicy(); pp != "" {
+			return ParsePullPolicyValue(pp)
+		}
+		if pp := t.GetKind(t.GetNodeKind(name)).GetImagePullPolicy(); pp != "" {
+			return ParsePullPolicyValue(pp)
+		}
+		if pp := t.GetDefaults().GetImagePullPolicy(); pp != "" {
+			return ParsePullPolicyValue(pp)
+		}
+	}
+	// let ParsePullPolicyValue return a default value for missing pull policy.
+	return ParsePullPolicyValue("")
 }
 
 func (t *Topology) GetNodeGroup(name string) string {
@@ -413,7 +465,28 @@ func (t *Topology) GetNodeMemory(name string) string {
 	return ""
 }
 
-// Returns the 'extras' section for the given node
+// GetSysCtl return the Sysctl configuration for the given node.
+func (t *Topology) GetSysCtl(name string) map[string]string {
+	if ndef, ok := t.Nodes[name]; ok {
+		return utils.MergeStringMaps(
+			utils.MergeStringMaps(t.GetDefaults().GetSysctls(),
+				t.GetKind(t.GetNodeKind(name)).GetSysctls()),
+			ndef.GetSysctls())
+	}
+	return nil
+}
+
+// GetSANs return the Subject Alternative Name configuration for the given node.
+func (t *Topology) GetSANs(name string) []string {
+	if ndef, ok := t.Nodes[name]; ok {
+		if len(ndef.GetSANs()) > 0 {
+			return ndef.GetSANs()
+		}
+	}
+	return nil
+}
+
+// GetNodeExtras returns the 'extras' section for the given node.
 func (t *Topology) GetNodeExtras(name string) *Extras {
 	if ndef, ok := t.Nodes[name]; ok {
 		node_extras := ndef.GetExtras()
@@ -431,6 +504,16 @@ func (t *Topology) GetNodeExtras(name string) *Extras {
 	return nil
 }
 
+// GetWaitFor return the wait-for configuration for the given node.
+func (t *Topology) GetWaitFor(name string) []string {
+	if ndef, ok := t.Nodes[name]; ok {
+		return utils.MergeStringSlices(
+			t.GetKind(t.GetNodeKind(name)).GetWaitFor(),
+			ndef.GetWaitFor())
+	}
+	return nil
+}
+
 func (t *Topology) ImportEnvs() {
 	t.Defaults.ImportEnvs()
 
@@ -443,24 +526,37 @@ func (t *Topology) ImportEnvs() {
 	}
 }
 
-//resolvePath resolves a string path by expanding `~` to home dir or getting Abs path for the given path
-func resolvePath(p string) (string, error) {
-	if p == "" {
-		return "", nil
-	}
-	var err error
-	switch {
-	// resolve ~/ path
-	case p[0] == '~':
-		p, err = homedir.Expand(p)
-		if err != nil {
-			return "", err
+func (t *Topology) GetNodeDns(name string) *DNSConfig {
+	if ndef, ok := t.Nodes[name]; ok {
+		nodeDNS := ndef.GetDns()
+		if nodeDNS != nil {
+			return nodeDNS
 		}
-	default:
-		p, err = filepath.Abs(p)
-		if err != nil {
-			return "", err
+
+		kindDNS := t.GetKind(t.GetNodeKind(name)).GetDns()
+		if kindDNS != nil {
+			return kindDNS
 		}
+
+		return t.GetDefaults().GetDns()
 	}
-	return p, nil
+	return nil
+}
+
+func (t *Topology) GetCertificateConfig(name string) *CertificateConfig {
+	if ndef, ok := t.Nodes[name]; ok {
+		nodeCertConf := ndef.GetCertificateConfig()
+		if nodeCertConf != nil {
+			return nodeCertConf
+		}
+
+		kindCertConf := t.GetKind(t.GetNodeKind(name)).GetCertificateConfig()
+		if kindCertConf != nil {
+			return kindCertConf
+		}
+
+		return t.GetDefaults().GetCertificateConfig()
+	}
+
+	return nil
 }

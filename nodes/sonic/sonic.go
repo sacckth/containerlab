@@ -9,75 +9,62 @@ import (
 	"fmt"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/srl-labs/containerlab/clab/exec"
 	"github.com/srl-labs/containerlab/nodes"
-	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/types"
 	"github.com/srl-labs/containerlab/utils"
 )
 
-func init() {
-	nodes.Register(nodes.NodeKindSonic, func() nodes.Node {
+var kindnames = []string{"sonic-vs"}
+
+// Register registers the node in the NodeRegistry.
+func Register(r *nodes.NodeRegistry) {
+	r.Register(kindnames, func() nodes.Node {
 		return new(sonic)
-	})
+	}, nil)
 }
 
 type sonic struct {
-	cfg     *types.NodeConfig
-	runtime runtime.ContainerRuntime
+	nodes.DefaultNode
 }
 
 func (s *sonic) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
-	s.cfg = cfg
+	// Init DefaultNode
+	s.DefaultNode = *nodes.NewDefaultNode(s)
+
+	s.Cfg = cfg
 	for _, o := range opts {
 		o(s)
 	}
 	// the entrypoint is reset to prevent it from starting before all interfaces are connected
 	// all main sonic agents are started in a post-deploy phase
-	s.cfg.Entrypoint = "/bin/bash"
+	s.Cfg.Entrypoint = "/bin/bash"
 	return nil
 }
-func (s *sonic) Config() *types.NodeConfig { return s.cfg }
 
-func (s *sonic) PreDeploy(_, _, _ string) error {
-	utils.CreateDirectory(s.cfg.LabDir, 0777)
-
-	return nil
-}
-func (s *sonic) Deploy(ctx context.Context) error {
-	_, err := s.runtime.CreateContainer(ctx, s.cfg)
-	return err
-}
-
-func (s *sonic) PostDeploy(ctx context.Context, _ map[string]nodes.Node) error {
-	log.Debugf("Running postdeploy actions for sonic-vs '%s' node", s.cfg.ShortName)
-
-	err := s.runtime.ExecNotWait(ctx, s.cfg.ContainerID, []string{"supervisord"})
+func (s *sonic) PreDeploy(_ context.Context, params *nodes.PreDeployParams) error {
+	utils.CreateDirectory(s.Cfg.LabDir, 0777)
+	_, err := s.LoadOrGenerateCertificate(params.Cert, params.TopologyName)
 	if err != nil {
-		return fmt.Errorf("failed post-deploy node %q: %w", s.cfg.ShortName, err)
+		return nil
 	}
-
-	err = s.runtime.ExecNotWait(ctx, s.cfg.ContainerID, []string{"supervisorctl start bgpd"})
-	if err != nil {
-		return fmt.Errorf("failed post-deploy node %q: %w", s.cfg.ShortName, err)
-	}
-
 	return nil
 }
 
-func (*sonic) WithMgmtNet(*types.MgmtNet)               {}
-func (s *sonic) WithRuntime(r runtime.ContainerRuntime) { s.runtime = r }
-func (s *sonic) GetRuntime() runtime.ContainerRuntime   { return s.runtime }
+func (s *sonic) PostDeploy(ctx context.Context, _ *nodes.PostDeployParams) error {
+	log.Debugf("Running postdeploy actions for sonic-vs '%s' node", s.Cfg.ShortName)
 
-func (s *sonic) Delete(ctx context.Context) error {
-	return s.runtime.DeleteContainer(ctx, s.Config().LongName)
-}
-
-func (s *sonic) GetImages() map[string]string {
-	return map[string]string{
-		nodes.ImageKey: s.cfg.Image,
+	cmd, _ := exec.NewExecCmdFromString("supervisord")
+	err := s.RunExecNotWait(ctx, cmd)
+	if err != nil {
+		return fmt.Errorf("failed post-deploy node %q: %w", s.Cfg.ShortName, err)
 	}
-}
 
-func (*sonic) SaveConfig(_ context.Context) error {
+	cmd, _ = exec.NewExecCmdFromString("supervisorctl start bgpd")
+	err = s.RunExecNotWait(ctx, cmd)
+	if err != nil {
+		return fmt.Errorf("failed post-deploy node %q: %w", s.Cfg.ShortName, err)
+	}
+
 	return nil
 }

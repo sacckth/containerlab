@@ -1,11 +1,15 @@
+---
+hide:
+  - navigation
+---
 Containerlab is distributed as a Linux deb/rpm package and can be installed on any Debian- or RHEL-like distributive in a matter of a few seconds.
 
 ### Pre-requisites
-The following requirements must be satisfied in order to let containerlab tool run successfully:
+The following requirements must be satisfied to let containerlab tool run successfully:
 
 * A user should have `sudo` privileges to run containerlab.
 * A Linux server/VM[^2] and [Docker](https://docs.docker.com/engine/install/) installed.
-* Load container images (e.g. Nokia SR Linux, Arista cEOS) which are not downloadable from a container registry. Containerlab will try to pull images at runtime if they do not exist locally.
+* Load container images (e.g. Nokia SR Linux, Arista cEOS) that are not downloadable from a container registry. Containerlab will try to pull images at runtime if they do not exist locally.
 
 ### Install script
 Containerlab can be installed using the [installation script](https://github.com/srl-labs/containerlab/blob/main/get.sh) which detects the operating system type and installs the relevant package:
@@ -16,13 +20,13 @@ Containerlab can be installed using the [installation script](https://github.com
 
 ```bash
 # download and install the latest release (may require sudo)
-bash -c "$(curl -sL https://get-clab.srlinux.dev)"
+bash -c "$(curl -sL https://get.containerlab.dev)"
 
 # download a specific version - 0.10.3 (may require sudo)
-bash -c "$(curl -sL https://get-clab.srlinux.dev)" -- -v 0.10.3
+bash -c "$(curl -sL https://get.containerlab.dev)" -- -v 0.10.3
 
 # with wget
-bash -c "$(wget -qO - https://get-clab.srlinux.dev)"
+bash -c "$(wget -qO - https://get.containerlab.dev)"
 ```
 
 ### Package managers
@@ -33,17 +37,19 @@ It is possible to install official containerlab releases via public APT/YUM repo
     echo "deb [trusted=yes] https://apt.fury.io/netdevops/ /" | \
     sudo tee -a /etc/apt/sources.list.d/netdevops.list
 
-    apt update && apt install containerlab
+    sudo apt update && sudo apt install containerlab
     ```
 === "YUM"
     ```
     yum-config-manager --add-repo=https://yum.fury.io/netdevops/ && \
     echo "gpgcheck=0" | sudo tee -a /etc/yum.repos.d/yum.fury.io_netdevops_.repo
 
-    yum install containerlab
+    sudo yum install containerlab
     ```
 === "APK"
     Download `.apk` package from [Github releases](https://github.com/srl-labs/containerlab/releases).
+=== "AUR"
+    Arch Linux users can download a package from this [AUR repository](https://aur.archlinux.org/packages/containerlab-bin).
 
 ??? "Manual package installation"
     Alternatively, users can manually download the deb/rpm package from the [Github releases](https://github.com/srl-labs/containerlab/releases) page.
@@ -70,9 +76,9 @@ Containerlab is also available in a container packaging. The latest containerlab
 docker pull ghcr.io/srl-labs/clab
 ```
 
-To pick any of the released versions starting from release 0.19.0, use the version number as a tag, for example: `docker pull ghcr.io/srl-labs/clab:0.19.0`
+To pick any of the released versions starting from release 0.19.0, use the version number as a tag, for example, `docker pull ghcr.io/srl-labs/clab:0.19.0`
 
-Since containerlab itself deploys containers and creates veth pairs, its run instructions are a bit more complex, but still it is a copy-paste-able command.
+Since containerlab itself deploys containers and creates veth pairs, its run instructions are a bit more complex, but still, it is a copy-paste-able command.
 
 For example, if your lab files are contained within the current working directory - `$(pwd)` - then you can launch containerlab container as follows:
 
@@ -82,6 +88,7 @@ docker run --rm -it --privileged \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v /var/run/netns:/var/run/netns \
     -v /etc/hosts:/etc/hosts \
+    -v /var/lib/docker/containers:/var/lib/docker/containers \
     --pid="host" \
     -v $(pwd):$(pwd) \
     -w $(pwd) \
@@ -140,6 +147,9 @@ Once installed, issue `sudo service docker start` to start the docker service in
 ### Mac OS
 Running containerlab on Mac OS is possible[^4] by means of a separate docker image with containerlab inside.
 
+!!!warning
+    ARM-based Macs (M1/2) are not supported, and no binaries are generated for this platform. This is mainly due to the lack of network images built for arm64 architecture as of now.
+
 To use this container use the following command:
 
 ```shell linenums="1"
@@ -160,6 +170,8 @@ The first command in the snippet above sets the working directory which you inte
 !!!note
     1. It is best to create a directory under the `~/some/path` unless you know what to do[^5]
     2. vrnetlab based nodes will not be able to start, since Docker VM does not support virtualization.
+    3. Docker Desktop for Mac introduced cgroups v2 support in 4.3.0 version; to support the images that require cgroups v1 follow [these instructions](https://github.com/docker/for-mac/issues/6073).
+    4. Docker Desktop relies on a LinuxKit based HyperKit VM. Unfortunately, it is shipped with a minimalist kernel, and some modules such as VRF are disabled by default. Follow [these instructions](https://medium.com/@notsinge/making-your-own-linuxkit-with-docker-for-mac-5c1234170fb1) to rebuild it with more modules. 
 
 When the container is started, you will have a bash shell opened with the directory contents mounted from the Mac OS. There you can use `containerlab` commands right away.
 
@@ -259,6 +271,37 @@ To build containerlab from source:
     ```
     goreleaser --snapshot --skip-publish --rm-dist
     ```
+
+### Uninstall
+To uninstall containerlab when it was installed via installation script or packages:
+
+=== "Debian-based system"
+    ```
+    apt remove containerlab
+    ```
+=== "RPM-based systems"
+    ```
+    yum remove containerlab
+    ```
+=== "Manual removal"
+    Containerlab binary is located at `/usr/bin/containerlab`. In addition to the binary, containerlab directory with static files may be found at `/etc/containerlab`.
+
+
+### SELinux
+When SELinux set to enforced mode containerlab binary might fail to execute with `Segmentation fault (core dumped)` error. This might be because containerlab binary is compressed with [upx](https://upx.github.io/) and selinux prevents it from being decompressed by default.
+
+To fix this:
+
+```
+sudo semanage fcontext -a -t textrel_shlib_t $(which containerlab)
+sudo restorecon $(which containerlab)
+```
+
+or more globally:
+
+```
+sudo setsebool -P selinuxuser_execmod 1
+```
 
 [^1]: only available if installed from packages
 [^2]: Most containerized NOS will require >1 vCPU. RAM size depends on the lab size. Architecture: AMD64.

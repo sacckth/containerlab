@@ -14,14 +14,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// Node Filter for config
+// Node Filter for config.
 var configFilter []string
 
-// configCmd represents the config command
+// configCmd represents the config command.
 var configCmd = &cobra.Command{
 	Use:          "config",
 	Short:        "configure a lab",
-	Long:         "configure a lab based on templates and variables from the topology definition file\nreference: https://containerlab.srlinux.dev/cmd/config/",
+	Long:         "configure a lab based on templates and variables from the topology definition file\nreference: https://containerlab.dev/cmd/config/",
 	Aliases:      []string{"conf"},
 	ValidArgs:    []string{"commit", "send", "compare", "template"},
 	SilenceUsage: true,
@@ -61,6 +61,8 @@ func configRun(_ *cobra.Command, args []string) error {
 	c, err := clab.NewContainerLab(
 		clab.WithTimeout(timeout),
 		clab.WithTopoFile(topo, varsFile),
+		clab.WithNodeFilter(nodeFilter),
+		clab.WithDebug(debug),
 	)
 	if err != nil {
 		return err
@@ -71,7 +73,7 @@ func configRun(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	allConfig := config.PrepareVars(c.Nodes, c.Links)
+	allConfig := config.PrepareVars(c)
 
 	err = config.RenderAll(allConfig)
 	if err != nil {
@@ -145,11 +147,17 @@ func validateFilter(nodes map[string]nodes.Node) error {
 
 func init() {
 	rootCmd.AddCommand(configCmd)
-	configCmd.Flags().StringSliceVarP(&config.TemplatePaths, "template-path", "p", []string{}, "comma separated list of paths to search for templates")
+	configCmd.Flags().StringSliceVarP(&config.TemplatePaths, "template-path", "p", []string{},
+		"comma separated list of paths to search for templates")
 	_ = configCmd.MarkFlagDirname("template-path")
-	configCmd.Flags().StringSliceVarP(&config.TemplateNames, "template-list", "l", []string{}, "comma separated list of template names to render")
-	configCmd.Flags().StringSliceVarP(&configFilter, "filter", "f", []string{}, "comma separated list of nodes to include")
+	configCmd.Flags().StringSliceVarP(&config.TemplateNames, "template-list", "l", []string{},
+		"comma separated list of template names to render")
+	configCmd.Flags().StringSliceVarP(&configFilter, "filter", "f", []string{},
+		"comma separated list of nodes to include")
 	configCmd.Flags().SortFlags = false
+
+	configCmd.Flags().StringSliceVarP(&nodeFilter, "node-filter", "", []string{},
+		"comma separated list of nodes to include")
 
 	configCmd.AddCommand(configSendCmd)
 	configSendCmd.Flags().AddFlagSet(configCmd.Flags())

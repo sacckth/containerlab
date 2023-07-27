@@ -1,9 +1,9 @@
 name: topo3
 topology:
   defaults:
-    license: test_data/default.lic
+    license: default.lic
     binds:
-      - test_data/default.lic:/dst
+      - default.lic:/dst
     type: ixrd2
     env:
       env1: val1
@@ -13,6 +13,6 @@ topology:
   nodes:
     node1:
       kind: srl
-      type: ixr6
+      type: ixrd3
     node2:
       kind: srl

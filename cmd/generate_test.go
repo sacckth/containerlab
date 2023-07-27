@@ -103,19 +103,22 @@ var nodesTestSet = map[string]struct {
 		out: nodesOutput{out: nil, err: errSyntax},
 	},
 	"no_kind_with_nodes_1": {
-		in: nodesInput{kind: "",
+		in: nodesInput{
+			kind:  "",
 			nodes: []string{"1", "2", "3"},
 		},
 		out: nodesOutput{out: nil, err: errSyntax},
 	},
 	"no_kind_with_nodes_2": {
-		in: nodesInput{kind: "",
+		in: nodesInput{
+			kind:  "",
 			nodes: []string{"1:srl", "2", "3"},
 		},
 		out: nodesOutput{out: nil, err: errSyntax},
 	},
 	"no_kind_with_nodes_3": {
-		in: nodesInput{kind: "",
+		in: nodesInput{
+			kind:  "",
 			nodes: []string{"1:srl", "2:ceos", "3"},
 		},
 		out: nodesOutput{out: nil, err: errSyntax},
@@ -127,9 +130,9 @@ var nodesTestSet = map[string]struct {
 		},
 		out: nodesOutput{
 			out: []nodesDef{
-				{numNodes: 1, kind: "srl", typ: "ixrd2"},
-				{numNodes: 2, kind: "srl", typ: "ixrd2"},
-				{numNodes: 3, kind: "srl", typ: "ixrd2"},
+				{numNodes: 1, kind: "srl", typ: ""},
+				{numNodes: 2, kind: "srl", typ: ""},
+				{numNodes: 3, kind: "srl", typ: ""},
 			},
 			err: nil,
 		},
@@ -142,7 +145,7 @@ var nodesTestSet = map[string]struct {
 		out: nodesOutput{
 			out: []nodesDef{
 				{numNodes: 1, kind: "linux", typ: ""},
-				{numNodes: 2, kind: "srl", typ: "ixrd2"},
+				{numNodes: 2, kind: "srl", typ: ""},
 				{numNodes: 3, kind: "ceos", typ: ""},
 			},
 			err: nil,
@@ -151,12 +154,12 @@ var nodesTestSet = map[string]struct {
 	"kind_nodes_with_kind_and_type": {
 		in: nodesInput{
 			kind:  "srl",
-			nodes: []string{"1:ixrd", "2", "3:ceos"},
+			nodes: []string{"1::ixrd", "2", "3:ceos"},
 		},
 		out: nodesOutput{
 			out: []nodesDef{
 				{numNodes: 1, kind: "srl", typ: "ixrd"},
-				{numNodes: 2, kind: "srl", typ: "ixrd2"},
+				{numNodes: 2, kind: "srl"},
 				{numNodes: 3, kind: "ceos", typ: ""},
 			},
 			err: nil,
@@ -169,7 +172,7 @@ var nodesTestSet = map[string]struct {
 		},
 		out: nodesOutput{
 			out: []nodesDef{
-				{numNodes: 2, kind: "srl", typ: "ixrd2"},
+				{numNodes: 2, kind: "srl", typ: ""},
 			},
 			err: nil,
 		},

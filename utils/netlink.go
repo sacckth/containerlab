@@ -13,6 +13,7 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
+// BridgeByName returns a *netlink.Bridge referenced by its name.
 func BridgeByName(name string) (*netlink.Bridge, error) {
 	l, err := netlink.LinkByName(name)
 	if err != nil {
@@ -25,8 +26,8 @@ func BridgeByName(name string) (*netlink.Bridge, error) {
 	return br, nil
 }
 
-// linkContainerNS creates a symlink for containers network namespace
-// so that it can be managed by iproute2 utility
+// LinkContainerNS creates a symlink for containers network namespace
+// so that it can be managed by iproute2 utility.
 func LinkContainerNS(nspath, containerName string) error {
 	CreateDirectory("/run/netns/", 0755)
 	dst := "/run/netns/" + containerName
@@ -38,16 +39,6 @@ func LinkContainerNS(nspath, containerName string) error {
 		return err
 	}
 	return nil
-}
-
-// getDefaultDockerMTU gets the MTU of a docker0 bridge interface
-// if fails to get the MTU of docker0, returns "1500"
-func DefaultNetMTU() (string, error) {
-	b, err := BridgeByName("docker0")
-	if err != nil {
-		return "1500", err
-	}
-	return fmt.Sprint(b.MTU), nil
 }
 
 func CheckBrInUse(brname string) (bool, error) {
@@ -78,14 +69,14 @@ func DeleteLinkByName(name string) error {
 	return netlink.LinkDel(l)
 }
 
-// GenMac generates a random MAC address for a given OUI
+// GenMac generates a random MAC address for a given OUI.
 func GenMac(oui string) string {
 	buf := make([]byte, 3)
 	_, _ = rand.Read(buf)
 	return fmt.Sprintf("%s:%02x:%02x:%02x", oui, buf[0], buf[1], buf[2])
 }
 
-// deleteNetnsSymlink deletes a network namespace and removes the symlink created by linkContainerNS func
+// DeleteNetnsSymlink deletes a network namespace and removes the symlink created by LinkContainerNS func.
 func DeleteNetnsSymlink(n string) error {
 	log.Debug("Deleting netns symlink: ", n)
 	sl := fmt.Sprintf("/run/netns/%s", n)
@@ -94,4 +85,43 @@ func DeleteNetnsSymlink(n string) error {
 		log.Debug("Failed to delete netns symlink by path:", sl)
 	}
 	return nil
+}
+
+// LinkIPs returns IPv4/IPv6 addresses assigned to a link referred by its name.
+func LinkIPs(ln string) (v4addrs, v6addrs []netlink.Addr, err error) {
+	l, err := netlink.LinkByName(ln)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to lookup link %q: %w", ln, err)
+	}
+
+	v4addrs, err = netlink.AddrList(l, netlink.FAMILY_V4)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	v6addrs, err = netlink.AddrList(l, netlink.FAMILY_V6)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return
+}
+
+// FirstLinkIPs returns string representation of the first IPv4/v6 address
+// found for a link referenced by name.
+func FirstLinkIPs(ln string) (v4, v6 string, err error) {
+	v4addrs, v6addrs, err := LinkIPs(ln)
+	if err != nil {
+		return
+	}
+
+	if len(v4addrs) != 0 {
+		v4 = v4addrs[0].IP.String()
+	}
+
+	if len(v6addrs) != 0 {
+		v6 = v6addrs[0].IP.String()
+	}
+
+	return v4, v6, err
 }

@@ -7,93 +7,98 @@ package vr_veos
 import (
 	"context"
 	"fmt"
+	"path"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/srl-labs/containerlab/netconf"
 	"github.com/srl-labs/containerlab/nodes"
-	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/types"
 	"github.com/srl-labs/containerlab/utils"
 )
 
-const (
-	scrapliPlatformName = "arista_eos"
+var (
+	kindnames          = []string{"vr-veos", "vr-arista_veos"}
+	defaultCredentials = nodes.NewCredentials("admin", "admin")
 )
 
-func init() {
-	nodes.Register(nodes.NodeKindVrVEOS, func() nodes.Node {
+const (
+	scrapliPlatformName = "arista_eos"
+
+	configDirName   = "config"
+	startupCfgFName = "startup-config.cfg"
+)
+
+// Register registers the node in the NodeRegistry.
+func Register(r *nodes.NodeRegistry) {
+	r.Register(kindnames, func() nodes.Node {
 		return new(vrVEOS)
-	})
+	}, defaultCredentials)
 }
 
 type vrVEOS struct {
-	cfg     *types.NodeConfig
-	mgmt    *types.MgmtNet
-	runtime runtime.ContainerRuntime
+	nodes.DefaultNode
 }
 
-func (s *vrVEOS) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
-	s.cfg = cfg
+func (n *vrVEOS) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
+	// Init DefaultNode
+	n.DefaultNode = *nodes.NewDefaultNode(n)
+	// set virtualization requirement
+	n.HostRequirements.VirtRequired = true
+
+	n.Cfg = cfg
 	for _, o := range opts {
-		o(s)
+		o(n)
 	}
 	// env vars are used to set launch.py arguments in vrnetlab container
 	defEnv := map[string]string{
 		"CONNECTION_MODE":    nodes.VrDefConnMode,
-		"USERNAME":           "admin",
-		"PASSWORD":           "admin",
-		"DOCKER_NET_V4_ADDR": s.mgmt.IPv4Subnet,
-		"DOCKER_NET_V6_ADDR": s.mgmt.IPv6Subnet,
+		"USERNAME":           defaultCredentials.GetUsername(),
+		"PASSWORD":           defaultCredentials.GetPassword(),
+		"DOCKER_NET_V4_ADDR": n.Mgmt.IPv4Subnet,
+		"DOCKER_NET_V6_ADDR": n.Mgmt.IPv6Subnet,
 	}
-	s.cfg.Env = utils.MergeStringMaps(defEnv, s.cfg.Env)
+	n.Cfg.Env = utils.MergeStringMaps(defEnv, n.Cfg.Env)
 
-	if s.cfg.Env["CONNECTION_MODE"] == "macvtap" {
+	// mount config dir to support startup-config functionality
+	n.Cfg.Binds = append(n.Cfg.Binds, fmt.Sprint(path.Join(n.Cfg.LabDir, configDirName), ":/config"))
+
+	if n.Cfg.Env["CONNECTION_MODE"] == "macvtap" {
 		// mount dev dir to enable macvtap
-		s.cfg.Binds = append(s.cfg.Binds, "/dev:/dev")
+		n.Cfg.Binds = append(n.Cfg.Binds, "/dev:/dev")
 	}
 
-	s.cfg.Cmd = fmt.Sprintf("--username %s --password %s --hostname %s --connection-mode %s --trace",
-		s.cfg.Env["USERNAME"], s.cfg.Env["PASSWORD"], s.cfg.ShortName, s.cfg.Env["CONNECTION_MODE"])
+	n.Cfg.Cmd = fmt.Sprintf("--username %s --password %s --hostname %s --connection-mode %s --trace",
+		defaultCredentials.GetUsername(), defaultCredentials.GetPassword(), n.Cfg.ShortName, n.Cfg.Env["CONNECTION_MODE"])
+
 	return nil
 }
 
-func (s *vrVEOS) Config() *types.NodeConfig { return s.cfg }
+func (n *vrVEOS) PreDeploy(_ context.Context, params *nodes.PreDeployParams) error {
+	utils.CreateDirectory(n.Cfg.LabDir, 0777)
 
-func (*vrVEOS) PreDeploy(_, _, _ string) error { return nil }
-
-func (s *vrVEOS) Deploy(ctx context.Context) error {
-	_, err := s.runtime.CreateContainer(ctx, s.cfg)
-	return err
-}
-
-func (*vrVEOS) PostDeploy(_ context.Context, _ map[string]nodes.Node) error {
-	return nil
-}
-
-func (s *vrVEOS) GetImages() map[string]string {
-	return map[string]string{
-		nodes.ImageKey: s.cfg.Image,
+	_, err := n.LoadOrGenerateCertificate(params.Cert, params.TopologyName)
+	if err != nil {
+		return nil
 	}
+
+	return nodes.LoadStartupConfigFileVr(n, configDirName, startupCfgFName)
 }
 
-func (s *vrVEOS) WithMgmtNet(mgmt *types.MgmtNet)        { s.mgmt = mgmt }
-func (s *vrVEOS) WithRuntime(r runtime.ContainerRuntime) { s.runtime = r }
-func (s *vrVEOS) GetRuntime() runtime.ContainerRuntime   { return s.runtime }
-
-func (s *vrVEOS) Delete(ctx context.Context) error {
-	return s.runtime.DeleteContainer(ctx, s.Config().LongName)
-}
-
-func (s *vrVEOS) SaveConfig(_ context.Context) error {
-	err := utils.SaveCfgViaNetconf(s.cfg.LongName,
-		nodes.DefaultCredentials[s.cfg.Kind][0],
-		nodes.DefaultCredentials[s.cfg.Kind][1],
+func (n *vrVEOS) SaveConfig(_ context.Context) error {
+	err := netconf.SaveConfig(n.Cfg.LongName,
+		defaultCredentials.GetUsername(),
+		defaultCredentials.GetPassword(),
 		scrapliPlatformName,
 	)
-
 	if err != nil {
 		return err
 	}
 
-	log.Infof("saved %s running configuration to startup configuration file\n", s.cfg.ShortName)
+	log.Infof("saved %s running configuration to startup configuration file\n", n.Cfg.ShortName)
 	return nil
+}
+
+// CheckInterfaceName checks if a name of the interface referenced in the topology file correct.
+func (n *vrVEOS) CheckInterfaceName() error {
+	return nodes.GenericVMInterfaceCheck(n.Cfg.ShortName, n.Cfg.Endpoints)
 }

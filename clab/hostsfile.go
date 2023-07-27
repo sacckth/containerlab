@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/srl-labs/containerlab/types"
+	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/utils"
 )
 
@@ -19,7 +19,7 @@ const (
 	clabHostsFilename    = "/etc/hosts"
 )
 
-func AppendHostsFileEntries(containers []types.GenericContainer, labname string) error {
+func AppendHostsFileEntries(containers []runtime.GenericContainer, labname string) error {
 	filename := clabHostsFilename
 	if labname == "" {
 		return fmt.Errorf("missing lab name")
@@ -54,9 +54,8 @@ func AppendHostsFileEntries(containers []types.GenericContainer, labname string)
 	return nil
 }
 
-// generateHostsEntries builds an /etc/hosts compliant text blob (as []byte]) for containers ipv4/6 address<->name pairs
-func generateHostsEntries(containers []types.GenericContainer, labname string) []byte {
-
+// generateHostsEntries builds an /etc/hosts compliant text blob (as []byte]) for containers ipv4/6 address<->name pairs.
+func generateHostsEntries(containers []runtime.GenericContainer, labname string) []byte {
 	entries := bytes.Buffer{}
 	v6entries := bytes.Buffer{}
 
@@ -68,10 +67,10 @@ func generateHostsEntries(containers []types.GenericContainer, labname string) [
 			continue
 		}
 		if cont.NetworkSettings.IPv4addr != "" {
-			fmt.Fprintf(&entries, "%s\t%s\n", cont.NetworkSettings.IPv4addr, strings.TrimLeft(cont.Names[0], "/"))
+			fmt.Fprintf(&entries, "%s\t%s\n", cont.NetworkSettings.IPv4addr, cont.Names[0])
 		}
 		if cont.NetworkSettings.IPv6addr != "" {
-			fmt.Fprintf(&v6entries, "%s\t%s\n", cont.NetworkSettings.IPv6addr, strings.TrimLeft(cont.Names[0], "/"))
+			fmt.Fprintf(&v6entries, "%s\t%s\n", cont.NetworkSettings.IPv6addr, cont.Names[0])
 		}
 	}
 

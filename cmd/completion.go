@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// completionCmd represents the completion command
+// completionCmd represents the completion command.
 var completionCmd = &cobra.Command{
 	Use:   "completion [bash|zsh|fish]",
 	Short: "generate completion script",
@@ -47,7 +47,7 @@ fish:
 `,
 	DisableFlagsInUseLine: true,
 	ValidArgs:             []string{"bash", "zsh", "fish"},
-	Args:                  cobra.ExactValidArgs(1),
+	Args:                  cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
 	Run: func(cmd *cobra.Command, args []string) {
 		switch args[0] {
 		case "bash":

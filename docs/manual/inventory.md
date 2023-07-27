@@ -46,6 +46,31 @@ Lab nodes are grouped under their kinds in the inventory so that the users can s
               ansible_host: <mgmt-ipv4-address>
     ```
 
+## Removing `ansible_host` var
+If you want to use a plugin[^1] that doesn't play well with the `ansible_host` variable injected by containerlab in the inventory file, you can leverage the `ansible-no-host-var` label. The label can be set on per-node, kind, or default levels; if set, containerlab will not generate the `ansible_host` variable in the inventory for the nodes with that label.  
+Note that without the `ansible_host` variable, the connection plugin will use the `inventory_hostname` and resolve the name accordingly if network reachability is needed.
+
+=== "topology file"
+    ```yaml
+    name: ansible
+      topology:
+        defaults:
+          labels:
+            ansible-no-host-var: "true"
+        nodes:
+          node1:
+          node2:
+    ```
+=== "generated ansible inventory"
+    ```yaml
+    all:
+      children:
+        linux:
+          hosts:
+            clab-ansible-node1:
+            clab-ansible-node2:
+    ```
+
 ## User-defined groups
 Users can enforce custom grouping of nodes in the inventory by adding the `ansible-inventory` label to the node definition:
 
@@ -82,3 +107,135 @@ As a result of this configuration, the generated inventory will look like this:
         clab-custom-groups-node1:
           ansible_host: 172.100.100.11
 ```
+
+## Topology Data
+Every time a user runs a `deploy` command, containerlab automatically exports information about the topology into `topology-data.json` file in the lab directory. Schema of exported data is determined based on a Go template specified in `--export-template` parameter, or a default template `/etc/containerlab/templates/export/auto.tmpl`, if the parameter is not provided.
+
+Containerlab internal data that is submitted for export via the template, has the following structure:
+
+```golang
+type TopologyExport struct {
+	Name        string                       `json:"name"`                  // Containerlab topology name
+	Type        string                       `json:"type"`                  // Always 'clab'
+	Clab        *CLab                        `json:"clab,omitempty"`        // Data parsed from a topology definitions yaml file
+	NodeConfigs map[string]*types.NodeConfig `json:"nodeconfigs,omitempty"` // Definitions of nodes expanded with dynamically created data
+}
+```
+
+To get the full list of fields available for export, you can export topology data with the following template `--export-template /etc/containerlab/templates/export/full.tmpl`. Note, some fields exported via `full.tmpl` might contain sensitive information like TLS private keys. To customize export data, it is recommended to start with a copy of `auto.tmpl` and change it according to your needs.
+
+Example of exported data when using default `auto.tmpl` template:
+
+=== "topology file srl02.clab.yml"
+    ```yaml
+    name: srl02
+
+    topology:
+      kinds:
+        srl:
+          type: ixrd3
+          image: ghcr.io/nokia/srlinux
+      nodes:
+        srl1:
+          kind: srl
+        srl2:
+          kind: srl
+
+      links:
+        - endpoints: ["srl1:e1-1", "srl2:e1-1"]
+    ```
+=== "sample generated topology-data.json"
+    ```json
+    {
+      "name": "srl02",
+      "type": "clab",
+      "clab": {
+        "config": {
+          "prefix": "clab",
+          "mgmt": {
+            "network": "clab",
+            "bridge": "br-<...>",
+            "ipv4-subnet": "172.20.20.0/24",
+            "ipv6-subnet": "2001:172:20:20::/64",
+            "mtu": "1500",
+            "external-access": true
+          },
+          "config-path": "<full path to a directory with srl02.clab.yml>"
+        }
+      },
+      "nodes": {
+        "srl1": {
+          "index": "0",
+          "shortname": "srl1",
+          "longname": "clab-srl02-srl1",
+          "fqdn": "srl1.srl02.io",
+          "group": "",
+          "labdir": "<full path to the lab node directory>",
+          "kind": "srl",
+          "image": "ghcr.io/nokia/srlinux",
+          "mgmt-net": "",
+          "mgmt-intf": "",
+          "mgmt-ipv4-address": "172.20.20.3",
+          "mgmt-ipv4-prefix-length": 24,
+          "mgmt-ipv6-address": "2001:172:20:20::3",
+          "mgmt-ipv6-prefix-length": 64,
+          "mac-address": "",
+          "labels": {
+            "clab-mgmt-net-bridge": "br-<...>",
+            "clab-node-group": "",
+            "clab-node-kind": "srl",
+            "clab-node-lab-dir": "<full path to the lab node directory>",
+            "clab-node-name": "srl1",
+            "clab-node-type": "ixrd3",
+            "clab-topo-file": "<full path to the srl02.clab.yml file>",
+            "containerlab": "srl02"
+          }
+        },
+        "srl2": {
+          "index": "1",
+          "shortname": "srl2",
+          "longname": "clab-srl02-srl2",
+          "fqdn": "srl2.srl02.io",
+          "group": "",
+          "labdir": "<full path to the lab node directory>",
+          "kind": "srl",
+          "image": "ghcr.io/nokia/srlinux",
+          "mgmt-net": "",
+          "mgmt-intf": "",
+          "mgmt-ipv4-address": "172.20.20.2",
+          "mgmt-ipv4-prefix-length": 24,
+          "mgmt-ipv6-address": "2001:172:20:20::2",
+          "mgmt-ipv6-prefix-length": 64,
+          "mac-address": "",
+          "labels": {
+            "clab-mgmt-net-bridge": "br-<...>",
+            "clab-node-group": "",
+            "clab-node-kind": "srl",
+            "clab-node-lab-dir": "<full path to the lab node directory>",
+            "clab-node-name": "srl2",
+            "clab-node-type": "ixrd3",
+            "clab-topo-file": "<full path to the srl02.clab.yml file>",
+            "containerlab": "srl02"
+          }
+        }
+      },
+      "links": [
+        {
+          "a": {
+            "node": "srl1",
+            "interface": "e1-1",
+            "mac": "<mac address>",
+            "peer": "z"
+          },
+          "z": {
+            "node": "srl2",
+            "interface": "e1-1",
+            "mac": "<mac address>",
+            "peer": "a"
+          }
+        }
+      ]
+    }
+    ```
+
+[^1]: For example [Ansible Docker connection](https://docs.ansible.com/ansible/latest/collections/community/docker/docker_connection.html) plugin.

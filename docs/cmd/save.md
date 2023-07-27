@@ -6,10 +6,11 @@ The `save` command perform configuration save for all the containers running in 
 
 The exact command that performs configuration save depends on a given kind. The below table explains the method used for each kind:
 
-| Kind               | Command                                                    | Notes                                       |
-| ------------------ | ---------------------------------------------------------- | ------------------------------------------- |
-| **Nokia SR Linux** | `sr_cli -d tools system configuration generate-checkpoint` | configuration is saved in a checkpoint file |
-| **Arista cEOS**    | not yet implemented                                        |                                             |
+| Kind               | Command                                     | Notes                                                   |
+| ------------------ | ------------------------------------------- | ------------------------------------------------------- |
+| **Nokia SR Linux** | `sr_cli -d tools system configuration save` |                                                         |
+| **Nokia SR OS**    |                                             | delivered via netconf RPC `copy-config running startup` |
+| **Arista cEOS**    | `Cli -p 15 -c wr`                           |                                                         |
 
 ### Usage
 
@@ -21,10 +22,21 @@ The exact command that performs configuration save depends on a given kind. The 
 
 With the global `--topo | -t` or `--name | -n` flag a user specifies from which lab to take the containers and perform the save configuration task.
 
+When the topology file flag is omitted, containerlab will try to find the matching file name by looking at the current working directory. If a single file is found, it will be used.
+
+#### node-filter
+
+The local `--node-filter` flag allows users to specify a subset of topology nodes targeted by `save` command. The value of this flag is a comma-separated list of node names as they appear in the topology.
+
+When a subset of nodes is specified, containerlab will only attempt to save configuration on the selected nodes.
+
 ### Examples
 
+#### Save the configuration of the containers in a specific lab
+
+Save the configuration of the containers running in lab named srl02
+
 ```bash
-# save the configuration of the containers running in lab named srl02
 ❯ containerlab save -n srl02
 INFO[0001] clab-srl02-srl1: stdout: /system:
     Generated checkpoint '/etc/opt/srlinux/checkpoint/checkpoint-0.json' with name 'checkpoint-2020-11-18T09:00:54.998Z' and comment ''

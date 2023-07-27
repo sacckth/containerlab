@@ -15,13 +15,13 @@ With such approach users are allowed to spread the load between multiple VMs and
 For the sake of the demonstration the topology used in this lab consists of just two virtualized routers [packaged in a container format](../manual/vrnetlab.md) - Nokia SR OS and Juniper vMX. Although the routers are running on different VMs, they logically form a back-to-back connection over a pair of interfaces aggregated in a logical bundle.
 
 <div class="mxgraph" style="max-width:100%;border:1px solid transparent;margin:0 auto; display:block;" data-mxgraph="{&quot;page&quot;:7,&quot;zoom&quot;:1.5,&quot;highlight&quot;:&quot;#0000ff&quot;,&quot;nav&quot;:true,&quot;check-visible-state&quot;:true,&quot;resize&quot;:true,&quot;url&quot;:&quot;https://raw.githubusercontent.com/srl-labs/containerlab/diagrams/multinode.drawio&quot;}"></div>
-<script type="text/javascript" src="https://cdn.jsdelivr.net/gh/hellt/drawio-js@main/embed2.js" async></script>
+<script type="text/javascript" src="https://viewer.diagrams.net/js/viewer-static.min.js" async></script>
 
 Upon succesful lab deployment and configuration, the routers will be able to exchange LACP frames, thus proving a transparent L2 connectivity and will be able to ping each other.
 
 ## Deployment
 
-Since this lab is of a multi-node nature, a user needs to have two machines/VMs and perform lab deployment process on each of them. The [lab directory](https://github.com/srl-labs/containerlab/tree/master/lab-examples/vxlan01/) has topology files named `vxlan-sros.clab.yml` and `vxlan-vmx.clab.yml` which are meant to be deployed on VM1 and VM2 accordingly.
+Since this lab is of a multi-node nature, a user needs to have two machines/VMs and perform lab deployment process on each of them. The [lab directory](https://github.com/srl-labs/containerlab/tree/main/lab-examples/vxlan01/) has topology files named `vxlan-sros.clab.yml` and `vxlan-vmx.clab.yml` which are meant to be deployed on VM1 and VM2 accordingly.
 
 The following command will deploy a lab on a specified host:
 
@@ -41,7 +41,7 @@ Both topology files leverage [host link](../manual/network.md#host-links) featur
   links:
     # we expose two sros container interfaces
     # to host namespace by using host interfaces style
-    # docs: https://containerlab.srlinux.dev/manual/network/#host-links
+    # docs: https://containerlab.dev/manual/network/#host-links
     - endpoints: ["sros:eth1", "host:sr-eth1"]
     - endpoints: ["sros:eth2", "host:sr-eth2"]
 ```
@@ -213,8 +213,8 @@ round-trip min = 2.61ms, avg = 8.04ms, max = 13.5ms, stddev = 0.000ms
 
 Great! Additionally users can [capture the traffic](../manual/wireshark.md) from any of the interfaces involved in the datapath. To see the VxLAN encapsulation the VM's outgoing interfaces should be used.
 
-[vmx-topofile]: https://github.com/srl-labs/containerlab/tree/master/lab-examples/vxlan01/vxlan-vmx.clab.yml
-[sros-topofile]: https://github.com/srl-labs/containerlab/tree/master/lab-examples/vxlan01/vxlan-sros.clab.yml
+[vmx-topofile]: https://github.com/srl-labs/containerlab/tree/main/lab-examples/vxlan01/vxlan-vmx.clab.yml
+[sros-topofile]: https://github.com/srl-labs/containerlab/tree/main/lab-examples/vxlan01/vxlan-sros.clab.yml
 
 [^1]: Resource requirements are provisional. Consult with the installation guides for additional information.
 [^2]: The lab has been validated using these versions of the required tools/components. Using versions other than stated might lead to a non-operational setup process.

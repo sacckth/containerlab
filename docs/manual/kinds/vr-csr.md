@@ -1,6 +1,10 @@
+---
+search:
+  boost: 4
+---
 # Cisco CSR1000v
 
-Cisco CSR1000v virtualized router is identified with `vr-csr` kind in the [topology file](../topo-def-file.md). It is built using [vrnetlab](../vrnetlab.md) project and essentially is a Qemu VM packaged in a docker container format.
+Cisco CSR1000v virtualized router is identified with `vr-csr` or `vr-cisco_csr1000v` kind in the [topology file](../topo-def-file.md). It is built using [vrnetlab](../vrnetlab.md) project and essentially is a Qemu VM packaged in a docker container format.
 
 vr-csr nodes launched with containerlab comes up pre-provisioned with SSH, SNMP, NETCONF and gNMI services enabled.
 
@@ -46,3 +50,19 @@ Data interfaces `eth1+` needs to be configured with IP addressing manually using
 ## Features and options
 ### Node configuration
 vr-csr nodes come up with a basic configuration where only `admin` user and management interfaces such as NETCONF provisioned.
+
+
+#### Startup configuration
+It is possible to make CSR1000V nodes boot up with a user-defined startup-config instead of a built-in one. With a [`startup-config`](../nodes.md#startup-config) property of the node/kind user sets the path to the config file that will be mounted to a container and used as a startup-config:
+
+```yaml
+topology:
+  nodes:
+    node:
+      kind: vr-csr
+      startup-config: myconfig.txt
+```
+
+With this knob containerlab is instructed to take a file `myconfig.txt` from the directory that hosts the topology file, and copy it to the lab directory for that specific node under the `/config/startup-config.cfg` name. Then the directory that hosts the startup-config dir is mounted to the container. This will result in this config being applied at startup by the node.
+
+Configuration is applied after the node is started, thus it can contain partial configuration snippets that you desire to add on top of the default config that a node boots up with.

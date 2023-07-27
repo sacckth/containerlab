@@ -25,14 +25,14 @@ The user configures the CLOS fabric topology by using the `--nodes` flag. The fl
 
 <div class="mxgraph" style="max-width:100%;border:1px solid transparent;margin:0 auto; display:block;" data-mxgraph="{&quot;page&quot;:12,&quot;zoom&quot;:1.4,&quot;highlight&quot;:&quot;#0000ff&quot;,&quot;nav&quot;:true,&quot;check-visible-state&quot;:true,&quot;resize&quot;:true,&quot;url&quot;:&quot;https://raw.githubusercontent.com/srl-labs/containerlab/diagrams/containerlab.drawio&quot;}"></div>
 
-<script type="text/javascript" src="https://cdn.jsdelivr.net/gh/hellt/drawio-js@main/embed2.js" async></script>
+<script type="text/javascript" src="https://viewer.diagrams.net/js/viewer-static.min.js" async></script>
 
-For example, the following flag value will define a 2-tier CLOS fabric with tier1 (leafs) consists of 4x SR Linux containers of IXR6 type and the 2x Arista cEOS spines:
+For example, the following flag value will define a 2-tier CLOS fabric with tier1 (leafs) consists of 4x SR Linux containers of IXR-D3 type and the 2x Arista cEOS spines:
 ```
-4:srl:ixr6,2:ceos
+4:srl:ixrd3,2:ceos
 ```
 
-Note, that the default kind is `srl`, so you can omit the kind for SR Linux node. The same nodes value can be expressed like that: `4:ixr6,2:ceos`
+Note, that the default kind is `srl`, so you can omit the kind for SR Linux node. The same nodes value can be expressed like that: `4:ixrd3,2:ceos`
 
 #### kind
 
@@ -76,7 +76,7 @@ With `--max-workers` flag it is possible to limit the amout of concurrent worker
 If during the deployment of a large scaled lab you see errors about max number of opened files reached, limit the max workers with this flag.
 
 #### file
-With `--file` flag its possible to save the generated topology definition in a file by a given path.
+With `--file` flag it's possible to save the generated topology definition in a file by a given path.
 
 #### node-prefix
 With `--node-prefix` flag a user sets the name prefix of every node in a lab.
@@ -94,17 +94,17 @@ With `--network` flag a user sets the name of the management network that will b
 Default: `clab`.
 
 #### ipv4-subnet | ipv6-subnet
-With `--ipv4-subnet` and `ipv6-subnet` its possible to change the address ranges of the management network. Nodes will receive IP addresses from these ranges if they are configured with DHCP.
+With `--ipv4-subnet` and `ipv6-subnet` it's possible to change the address ranges of the management network. Nodes will receive IP addresses from these ranges if they are configured with DHCP.
 
 ### Examples
 
-```bash
-# generate and deploy a lab topology for 3-tier CLOS network
-# with 8 leafs, 4 spines and 2 superspines
-# all using Nokia SR Linux nodes with license and image provided.
-# Note that `srl` kind in the image and license flags might be omitted,
-# as it is implied by default)
+#### Generate topology for a 3-tier CLOS network
+Generate and deploy a lab topology for 3-tier CLOS network with 8 leafs, 4 spines and 2 superspines. All using Nokia SR Linux nodes with license and image provided.
 
+!!! note
+    The `srl` kind in the image and license flags can be omitted, as it is implied by default
+
+```bash
 containerlab generate --name 3tier --image srl=srlinux:latest \
                       --license srl=license.key \
                       --nodes 8,4,2 --deploy

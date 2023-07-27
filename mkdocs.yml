@@ -3,34 +3,45 @@ nav:
   - Home: index.md
   - Installation: install.md
   - Quick start: quickstart.md
+  - Kinds: manual/kinds/index.md
   - User manual:
       - Topology definition: manual/topo-def-file.md
       - Nodes: manual/nodes.md
       - Kinds:
-          - About: manual/kinds/kinds.md
-          - srl - Nokia SR Linux: manual/kinds/srl.md
-          - crpd - Juniper cRPD: manual/kinds/crpd.md
-          - ceos - Arista cEOS: manual/kinds/ceos.md
-          - cvx - Cumulus VX: manual/kinds/cvx.md
-          - sonic-vs - SONiC: manual/kinds/sonic-vs.md
-          - vr-sros - Nokia SR OS: manual/kinds/vr-sros.md
-          - vr-vmx - Juniper vMX: manual/kinds/vr-vmx.md
-          - vr-vqfx - Juniper vQFX: manual/kinds/vr-vqfx.md
-          - vr-xrv9k - Cisco XRv9k: manual/kinds/vr-xrv9k.md
-          - vr-xrv - Cisco XRv: manual/kinds/vr-xrv.md
-          - vr-csr - Cisco CSR1000v: manual/kinds/vr-csr.md
-          - vr-n9kv - Cisco Nexus 9000v: manual/kinds/vr-n9kv.md
-          - vr-ftosv - Dell FTOS10v: manual/kinds/vr-ftosv.md
-          - vr-veos - Arista vEOS: manual/kinds/vr-veos.md
-          - vr-ros - MikroTik RouterOS: manual/kinds/vr-ros.md
-          - vr-pan - Palo Alto PAN: manual/kinds/vr-pan.md
-          - linux - Linux container: manual/kinds/linux.md
-          - bridge - Linux bridge: manual/kinds/bridge.md
-          - ovs-bridge - Openvswitch bridge: manual/kinds/ovs-bridge.md
+          - manual/kinds/index.md
+          - Nokia SR Linux: manual/kinds/srl.md
+          - Nokia SR OS: manual/kinds/vr-sros.md
+          - Arista cEOS: manual/kinds/ceos.md
+          - Arista vEOS: manual/kinds/vr-veos.md
+          - Juniper cRPD: manual/kinds/crpd.md
+          - Juniper vMX: manual/kinds/vr-vmx.md
+          - Juniper vQFX: manual/kinds/vr-vqfx.md
+          - Juniper vSRX: manual/kinds/vr-vsrx.md
+          - Cisco XRd: manual/kinds/xrd.md
+          - Cisco XRv9k: manual/kinds/vr-xrv9k.md
+          - Cisco XRv: manual/kinds/vr-xrv.md
+          - Cisco CSR1000v: manual/kinds/vr-csr.md
+          - Cisco Nexus 9000v: manual/kinds/vr-n9kv.md
+          - Cisco 8000: manual/kinds/c8000.md
+          - Cumulus VX: manual/kinds/cvx.md
+          - SONiC: manual/kinds/sonic-vs.md
+          - Dell FTOS10v: manual/kinds/vr-ftosv.md
+          - MikroTik RouterOS: manual/kinds/vr-ros.md
+          - Palo Alto PAN: manual/kinds/vr-pan.md
+          - IPInfusion OcNOS: manual/kinds/ipinfusion-ocnos.md
+          - Keysight IXIA-C One: manual/kinds/keysight_ixia-c-one.md
+          - Check Point Cloudguard: manual/kinds/checkpoint_cloudguard.md
+          - Linux bridge: manual/kinds/bridge.md
+          - Linux container: manual/kinds/linux.md
+          - RARE/freeRtr: manual/kinds/rare-freertr.md
+          - Openvswitch bridge: manual/kinds/ovs-bridge.md
+          - External container: manual/kinds/ext-container.md
+          - Host: manual/kinds/host.md
       - Configuration artifacts: manual/conf-artifacts.md
       - Network wiring concepts: manual/network.md
       - Packet capture & Wireshark: manual/wireshark.md
       - VM based routers integration: manual/vrnetlab.md
+      - Node filtering: manual/node-filtering.md
       - Publish ports: manual/published-ports.md
       - Multi-node labs: manual/multi-node.md
       - Certificate management: manual/cert.md
@@ -55,8 +66,6 @@ nav:
               - ca:
                   - create: cmd/tools/cert/ca/create.md
               - sign: cmd/tools/cert/sign.md
-          - mysocketio:
-              - login: cmd/tools/mysocketio/login.md
       - completions: cmd/completion.md
   - Lab examples:
       - About: lab-examples/lab-examples.md
@@ -70,8 +79,10 @@ nav:
       - Nokia SR Linux and SONiC: lab-examples/srl-sonic.md
       - External bridge capability: lab-examples/ext-bridge.md
       - WAN topology: lab-examples/wan.md
+      - Peering lab: lab-examples/peering-lab.md
       - Nokia SR Linux and Nokia SR OS: lab-examples/vr-sros.md
       - Nokia SR Linux and Juniper vMX: lab-examples/vr-vmx.md
+      - Nokia SR Linux and Cisco XRd: lab-examples/srl-xrd.md
       - Nokia SR Linux and Cisco XRv9k: lab-examples/vr-xrv9k.md
       - Nokia SR Linux and Cisco XRv: lab-examples/vr-xrv.md
       - Nokia SR Linux and FRR: lab-examples/srl-frr.md
@@ -79,11 +90,36 @@ nav:
       - Cumulus Linux and FRR: lab-examples/cvx01.md
       - Cumulus Linux (docker runtime) and Host: lab-examples/cvx02.md
       - BGP VPLS between Nokia and Juniper: lab-examples/bgp-vpls-nok-jun.md
+      - Keysight IXIA-C and Nokia SR Linux: lab-examples/ixiacone-srl.md
       - Multi-node labs: lab-examples/multinode.md
       - Templated labs:
           - Leaf-spine topology: lab-examples/templated01.md
           - 5-stage Clos topology: lab-examples/templated02.md
+      - RARE/freeRtr: lab-examples/rare-freertr.md
   - Release notes:
+      - "0.43": rn/0.43.md
+      - "0.42": rn/0.42.md
+      - "0.41": rn/0.41.md
+      - "0.40": rn/0.40.md
+      - "0.39": rn/0.39.md
+      - "0.38": rn/0.38.md
+      - "0.37": rn/0.37.md
+      - "0.36": rn/0.36.md
+      - "0.35": rn/0.35.md
+      - "0.34": rn/0.34.md
+      - "0.33": rn/0.33.md
+      - "0.32": rn/0.32.md
+      - "0.31": rn/0.31.md
+      - "0.30": rn/0.30.md
+      - "0.29": rn/0.29.md
+      - "0.28": rn/0.28.md
+      - "0.27": rn/0.27.md
+      - "0.26": rn/0.26.md
+      - "0.25": rn/0.25.md
+      - "0.24": rn/0.24.md
+      - "0.23": rn/0.23.md
+      - "0.22": rn/0.22.md
+      - "0.21": rn/0.21.md
       - "0.20": rn/0.20.md
       - 0.19: rn/0.19.md
       - 0.18: rn/0.18.md
@@ -106,8 +142,8 @@ site_description: >-
 # Repository
 repo_name: srl-labs/containerlab
 repo_url: https://github.com/srl-labs/containerlab
-site_url: "https://containerlab.srlinux.dev/"
-edit_uri: ""
+site_url: "https://containerlab.dev/"
+edit_uri: "edit/main/docs/"
 theme:
   name: material
   custom_dir: docs/overrides
@@ -122,10 +158,16 @@ theme:
 
   features:
     - navigation.top
-    - navigation.instant
-    - navigation.tracking
+    # - navigation.instant
     - navigation.tabs
     - search.suggest
+    - content.code.annotate
+    - content.code.copy
+    - content.code.select
+    - content.action.edit
+    - toc.follow
+    - content.tooltips
+    - navigation.indexes
 
   language: en
   palette:
@@ -146,20 +188,26 @@ theme:
         icon: material/toggle-switch
         name: Switch to light mode
   font:
-    text: Manrope
+    text: Google Sans
     code: Fira Mono
   icon:
     logo: fontawesome/solid/flask
+    repo: fontawesome/brands/github
+    edit: material/file-edit-outline
   favicon: images/flask.svg
 
 # Plugins
 plugins:
-  - search
+  - search:
+      separator: '[\s\-\_]'
   - minify:
       minify_html: true
   - redirects:
       redirect_maps:
         lab-examples/tls-cert.md: https://clabs.netdevops.me/security/gnmitls/
+        lab-examples/ixp-lab.md: lab-examples/peering-lab.md
+  - typeset
+  - glightbox
 
 # Customization
 extra:
@@ -186,7 +234,7 @@ markdown_extensions:
   - markdown.extensions.def_list
   - markdown.extensions.footnotes
   - markdown.extensions.meta
-  - markdown.extensions.toc:
+  - toc:
       permalink: "#"
   - pymdownx.arithmatex
   - pymdownx.betterem:
@@ -198,20 +246,27 @@ markdown_extensions:
       emoji_index: !!python/name:materialx.emoji.twemoji
       emoji_generator: !!python/name:materialx.emoji.to_svg
   - pymdownx.highlight:
-      linenums_style: pymdownx-inline
+      line_spans: __span
+      anchor_linenums: true
+      pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.keys
   - pymdownx.magiclink:
       repo_url_shorthand: true
-      user: squidfunk
-      repo: mkdocs-material
+      user: srl-labs
+      repo: containerlab
   - pymdownx.mark
   - pymdownx.smartsymbols:
       fractions: false
   - pymdownx.snippets:
       check_paths: true
-  - pymdownx.superfences
-  - pymdownx.tabbed
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
   - pymdownx.tasklist:
       custom_checkbox: true
   - pymdownx.tilde

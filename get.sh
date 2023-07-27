@@ -9,7 +9,7 @@
 : ${BIN_INSTALL_DIR:="/usr/bin"}
 : ${REPO_NAME:="srl-labs/containerlab"}
 : ${REPO_URL:="https://github.com/$REPO_NAME"}
-: ${PROJECT_URL:="https://containerlab.srlinux.dev"}
+: ${PROJECT_URL:="https://containerlab.dev"}
 
 # detectArch discovers the architecture for this system.
 detectArch() {
@@ -18,7 +18,7 @@ detectArch() {
     # armv5*) ARCH="armv5" ;;
     # armv6*) ARCH="armv6" ;;
     # armv7*) ARCH="arm" ;;
-    # aarch64) ARCH="arm64" ;;
+    aarch64) ARCH="arm64" ;;
     x86) ARCH="386" ;;
     x86_64) ARCH="amd64" ;;
     i686) ARCH="386" ;;
@@ -35,11 +35,26 @@ detectOS() {
     mingw*) OS='windows' ;;
     esac
 
-    if type "rpm" &>/dev/null; then
-        PKG_FORMAT="rpm"
-    elif type "dpkg" &>/dev/null; then
-        PKG_FORMAT="deb"
+    if [ -f /etc/os-release ]; then
+        OS_ID="$(. /etc/os-release && echo "$ID")"
     fi
+    case "${OS_ID}" in
+        ubuntu|debian|raspbian)
+            PKG_FORMAT="deb"
+        ;;
+
+        centos|rhel|sles)
+            PKG_FORMAT="rpm"
+        ;;
+
+        *)
+            if type "rpm" &>/dev/null; then
+                PKG_FORMAT="rpm"
+            elif type "dpkg" &>/dev/null; then
+                PKG_FORMAT="deb"
+            fi
+        ;;
+    esac
 }
 
 # runs the given command as root (detects if we are root already)
@@ -55,7 +70,7 @@ runAsRoot() {
 
 # verifySupported checks that the os/arch combination is supported
 verifySupported() {
-    local supported="linux-amd64\nlinux-386"
+    local supported="linux-amd64\nlinux-386\nlinux-arm64"
     if ! echo "${supported}" | grep -q "${OS}-${ARCH}"; then
         echo "No prebuilt binary for ${OS}-${ARCH}."
         echo "To build from source, go to ${REPO_URL}"
@@ -85,7 +100,7 @@ setDesiredVersion() {
         # when desired version is not provided
         # get latest tag from the gh releases
         if type "curl" &>/dev/null; then
-            local latest_release_url=$(curl -s $REPO_URL/releases/latest | cut -d '"' -f 2)
+            local latest_release_url=$(curl -s https://api.github.com/repos/$REPO_NAME/releases/latest | sed '5q;d' | cut -d '"' -f 4)
             TAG=$(echo $latest_release_url | cut -d '"' -f 2 | awk -F "/" '{print $NF}')
             # tag with stripped `v` prefix
             TAG_WO_VER=$(echo "${TAG}" | cut -c 2-)
@@ -119,21 +134,37 @@ checkInstalledVersion() {
     if [[ -f "${BIN_INSTALL_DIR}/${BINARY_NAME}" ]]; then
         local version=$("${BIN_INSTALL_DIR}/${BINARY_NAME}" version | grep version | awk '{print $NF}')
         if [[ "v$version" == "$TAG" ]]; then
-            echo "${BINARY_NAME} is already at ${DESIRED_VERSION:-latest ($version)}" version
+            echo "${BINARY_NAME} is already at its ${DESIRED_VERSION:-latest ($version)}" version
             return 0
         else
-            echo "A newer ${BINARY_NAME} ${TAG_WO_VER} is available. Release notes: https://containerlab.srlinux.dev/rn/${TAG_WO_VER}"
-            echo "You are running containerlab $version version"
-            UPGR_NEEDED="Y"
-            # check if stdin is open (i.e. capable of getting users input)
-            if [ -t 0 ]; then
-                read -e -p "Proceed with upgrade? [Y/n]: " -i "Y" UPGR_NEEDED
+            if [ "$(printf '%s\n' "$TAG_WO_VER" "$version" | sort -V | head -n1)" = "$TAG_WO_VER" ]; then
+                echo "A newer ${BINARY_NAME} version $version is already installed"
+                echo "You are running ${BINARY_NAME} version $version"
+                echo "You are trying to downgrade to ${BINARY_NAME} version ${TAG_WO_VER}"
+                echo "Release notes: https://containerlab.dev/rn/${TAG_WO_VER}"
+                UPGR_NEEDED="Y"
+                # check if stdin is open (i.e. capable of getting users input)
+                if [ -t 0 ]; then
+                    read -e -p "Proceed with downgrade? [Y/n]: " -i "Y" UPGR_NEEDED
+                fi
+                if [ "$UPGR_NEEDED" == "Y" ]; then
+                    return 1
+                fi
+                return 0
+            else
+                echo "A newer ${BINARY_NAME} ${TAG_WO_VER} is available. Release notes: https://containerlab.dev/rn/${TAG_WO_VER}"
+                echo "You are running containerlab $version version"
+                UPGR_NEEDED="Y"
+                # check if stdin is open (i.e. capable of getting users input)
+                if [ -t 0 ]; then
+                    read -e -p "Proceed with upgrade? [Y/n]: " -i "Y" UPGR_NEEDED
+                fi
+                if [ "$UPGR_NEEDED" == "Y" ]; then
+                    return 1
+                fi
+                return 0
             fi
-            if [ "$UPGR_NEEDED" == "Y" ]; then
-                return 1
-            fi
-            return 0
-        fi
+          fi
     else
         return 1
     fi
@@ -189,12 +220,25 @@ installFile() {
 # installPkg installs the downloaded version of a package in a deb or rpm format
 installPkg() {
     echo "Preparing to install $BINARY_NAME ${TAG_WO_VER} from package"
+    runAsRoot $PKG_INSTALLER $TMP_FILE
+}
+
+# setPkgInstaller deduces the pkg installation command
+setPkgInstaller() {
     if [ $PKG_FORMAT == "deb" ]; then
-        runAsRoot dpkg -i $TMP_FILE
+        PKG_INSTALLER="dpkg -i"
     elif [ $PKG_FORMAT == "rpm" ]; then
-        runAsRoot rpm -U $TMP_FILE
+        if [ -f /etc/os-release ]; then
+            VARIANT_ID="$(. /etc/os-release && echo "$VARIANT_ID")"
+        fi
+        if [[ -n "$VARIANT_ID" && $VARIANT_ID == "coreos" ]]; then
+            PKG_INSTALLER="rpm-ostree install --uninstall=containerlab --idempotent"
+        else
+            PKG_INSTALLER="rpm -U --oldpackage"
+        fi
     fi
 }
+
 
 # fail_trap is executed if an error occurs.
 fail_trap() {
@@ -214,6 +258,13 @@ fail_trap() {
 
 # testVersion tests the installed client to make sure it is working.
 testVersion() {
+    if [ -f /etc/os-release ]; then
+        # CoreOS requires a reboot for the new layers to become active, hence the binary is not yet available
+        VARIANT_ID="$(. /etc/os-release && echo "$VARIANT_ID")"
+        if [[ -n "$VARIANT_ID" && $VARIANT_ID == "coreos" ]]; then
+            exit 0
+        fi
+    fi
     set +e
     $BIN_INSTALL_DIR/$BINARY_NAME version
     if [ "$?" = "1" ]; then
@@ -243,7 +294,7 @@ cleanup() {
 
 # Execution
 
-#Stop execution on any error
+# Stop execution on any error
 trap "fail_trap" EXIT
 set -e
 
@@ -291,6 +342,7 @@ if ! checkInstalledVersion; then
     verifyOpenssl
     downloadFile
     if [ $USE_PKG == "true" ]; then
+        setPkgInstaller
         installPkg
     else
         installFile

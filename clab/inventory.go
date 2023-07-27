@@ -7,16 +7,15 @@ package clab
 import (
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"text/template"
 
 	"github.com/srl-labs/containerlab/types"
 )
 
-// GenerateInventories generate various inventory files and writes it to a lab location
+// GenerateInventories generate various inventory files and writes it to a lab location.
 func (c *CLab) GenerateInventories() error {
-	ansibleInvFPath := filepath.Join(c.Dir.Lab, "ansible-inventory.yml")
+	ansibleInvFPath := c.TopoPaths.AnsibleInventoryFileAbsPath()
 	f, err := os.Create(ansibleInvFPath)
 	if err != nil {
 		return err
@@ -24,27 +23,29 @@ func (c *CLab) GenerateInventories() error {
 	return c.generateAnsibleInventory(f)
 }
 
-// generateAnsibleInventory generates and writes ansible inventory file to w
+// generateAnsibleInventory generates and writes ansible inventory file to w.
 func (c *CLab) generateAnsibleInventory(w io.Writer) error {
-
-	invT :=
-		`all:
+	invT := `all:
   children:
 {{- range $kind, $nodes := .Nodes}}
     {{$kind}}:
       hosts:
 {{- range $nodes}}
         {{.LongName}}:
+		{{- if not (eq (index .Labels "ansible-no-host-var") "true") }}
           ansible_host: {{.MgmtIPv4Address}}
+		{{- end -}}
 {{- end}}
 {{- end}}
 {{- range $name, $nodes := .Groups}}
     {{$name}}:
       hosts:
-      {{- range $nodes}}
+{{- range $nodes}}
         {{.LongName}}:
+		{{- if not (eq (index .Labels "ansible-no-host-var") "true") }}
           ansible_host: {{.MgmtIPv4Address}}
-      {{- end}}
+	    {{- end -}}
+{{- end}}
 {{- end}}
 `
 
@@ -63,7 +64,8 @@ func (c *CLab) generateAnsibleInventory(w io.Writer) error {
 	for _, n := range c.Nodes {
 		i.Nodes[n.Config().Kind] = append(i.Nodes[n.Config().Kind], n.Config())
 		if n.Config().Labels["ansible-group"] != "" {
-			i.Groups[n.Config().Labels["ansible-group"]] = append(i.Groups[n.Config().Labels["ansible-group"]], n.Config())
+			i.Groups[n.Config().Labels["ansible-group"]] =
+				append(i.Groups[n.Config().Labels["ansible-group"]], n.Config())
 		}
 	}
 
@@ -90,5 +92,4 @@ func (c *CLab) generateAnsibleInventory(w io.Writer) error {
 		return err
 	}
 	return err
-
 }

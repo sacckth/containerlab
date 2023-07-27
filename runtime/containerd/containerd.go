@@ -18,16 +18,19 @@ import (
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/oci"
 	"github.com/containernetworking/cni/libcni"
-	"github.com/containernetworking/cni/pkg/types/current"
+	current "github.com/containernetworking/cni/pkg/types/040"
 	"github.com/docker/go-units"
 	"github.com/dustin/go-humanize"
 	"github.com/google/shlex"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"github.com/srl-labs/containerlab/clab/exec"
 	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/types"
 	"github.com/srl-labs/containerlab/utils"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 const (
@@ -40,7 +43,8 @@ const (
 func init() {
 	runtime.Register(runtimeName, func() runtime.ContainerRuntime {
 		return &ContainerdRuntime{
-			Mgmt: new(types.MgmtNet)}
+			mgmt: &types.MgmtNet{},
+		}
 	})
 }
 
@@ -65,10 +69,12 @@ func (c *ContainerdRuntime) Init(opts ...runtime.RuntimeOption) error {
 	return nil
 }
 
+func (c *ContainerdRuntime) Mgmt() *types.MgmtNet { return c.mgmt }
+
 type ContainerdRuntime struct {
 	config runtime.RuntimeConfig
 	client *containerd.Client
-	Mgmt   *types.MgmtNet
+	mgmt   *types.MgmtNet
 }
 
 func (c *ContainerdRuntime) WithConfig(cfg *runtime.RuntimeConfig) {
@@ -88,7 +94,10 @@ func (c *ContainerdRuntime) WithMgmtNet(n *types.MgmtNet) {
 		}
 		n.Bridge = "br-" + netname
 	}
-	c.Mgmt = n
+	if n.MTU == "" {
+		n.MTU = "9500"
+	}
+	c.mgmt = n
 }
 
 func (c *ContainerdRuntime) WithKeepMgmtNet() {
@@ -101,9 +110,10 @@ func (*ContainerdRuntime) CreateNet(_ context.Context) error {
 	log.Debug("CreateNet() - Not needed with containerd")
 	return nil
 }
+
 func (c *ContainerdRuntime) DeleteNet(context.Context) error {
 	var err error
-	bridgename := c.Mgmt.Bridge
+	bridgename := c.mgmt.Bridge
 	brInUse := true
 	for i := 0; i < 10; i++ {
 		brInUse, err = utils.CheckBrInUse(bridgename)
@@ -126,18 +136,30 @@ func (c *ContainerdRuntime) DeleteNet(context.Context) error {
 	return utils.DeleteLinkByName(bridgename)
 }
 
-func (c *ContainerdRuntime) PullImageIfRequired(ctx context.Context, imagename string) error {
-	log.Debugf("Looking up %s container image", imagename)
+func (c *ContainerdRuntime) PullImage(ctx context.Context, imageName string, pullPolicy types.PullPolicyValue) error {
+	log.Debugf("Looking up %s container image", imageName)
 	ctx = namespaces.WithNamespace(ctx, containerdNamespace)
-	if !strings.Contains(imagename, ":") {
-		imagename = imagename + ":latest"
+	if !strings.Contains(imageName, ":") {
+		imageName = imageName + ":latest"
 	}
-	_, err := c.client.GetImage(ctx, imagename)
-	if err == nil {
-		log.Debugf("Image %s present, skip pulling", imagename)
+	_, err := c.client.GetImage(ctx, imageName)
+	if pullPolicy == types.PullPolicyNever {
+		if err != nil {
+			// image not found but pull policy = never
+			return fmt.Errorf("image %s not found locally, but image-pull-policy is %s", imageName, pullPolicy)
+		} else {
+			// image present, all good
+			log.Debugf("Image %s present, skip pulling", imageName)
+			return nil
+		}
+	}
+	if pullPolicy == types.PullPolicyIfNotPresent && err == nil {
+		// pull policy == IfNotPresent and image is present
+		log.Debugf("Image %s present, skip pulling", imageName)
 		return nil
 	}
-	n := utils.GetCanonicalImageName(imagename)
+
+	n := utils.GetCanonicalImageName(imageName)
 	_, err = c.client.Pull(ctx, n, containerd.WithPullUnpack)
 	if err != nil {
 		return err
@@ -145,13 +167,15 @@ func (c *ContainerdRuntime) PullImageIfRequired(ctx context.Context, imagename s
 	return nil
 }
 
-func (c *ContainerdRuntime) CreateContainer(ctx context.Context, node *types.NodeConfig) (interface{}, error) {
+func (c *ContainerdRuntime) CreateContainer(_ context.Context, _ *types.NodeConfig) (string, error) {
+	// this is a no-op
+	return "", nil
+}
+
+func (c *ContainerdRuntime) StartContainer(ctx context.Context, _ string, node *types.NodeConfig) (interface{}, error) {
 	ctx = namespaces.WithNamespace(ctx, containerdNamespace)
 
 	var img containerd.Image
-	if !strings.Contains(node.Image, ":") {
-		node.Image = node.Image + ":latest"
-	}
 	img, err := c.client.GetImage(ctx, node.Image)
 	if err != nil {
 		// try fetching the image with canonical name
@@ -232,7 +256,7 @@ func (c *ContainerdRuntime) CreateContainer(ctx context.Context, node *types.Nod
 	case "none":
 		// Done!
 	default:
-		cnic, cncl, cnirc, err = cniInit(node.LongName, "eth0", c.Mgmt)
+		cnic, cncl, cnirc, err = cniInit(node.LongName, "eth0", c.mgmt)
 		if err != nil {
 			return nil, err
 		}
@@ -252,7 +276,10 @@ func (c *ContainerdRuntime) CreateContainer(ctx context.Context, node *types.Nod
 				if err != nil {
 					return nil, err
 				}
-				portmappings = append(portmappings, portMapping{HostPort: hostport, ContainerPort: contdatasl.Int(), Protocol: contdatasl.Proto()})
+				portmappings = append(portmappings, portMapping{
+					HostPort:      hostport,
+					ContainerPort: contdatasl.Int(), Protocol: contdatasl.Proto(),
+				})
 			}
 		}
 		if len(portmappings) > 0 {
@@ -280,11 +307,18 @@ func (c *ContainerdRuntime) CreateContainer(ctx context.Context, node *types.Nod
 	log.Debugf("Container '%s' created", node.LongName)
 	log.Debugf("Start container: %s", node.LongName)
 
-	err = c.StartContainer(ctx, node.LongName)
+	container, err := c.client.LoadContainer(ctx, node.LongName)
 	if err != nil {
 		return nil, err
 	}
-
+	task, err := container.NewTask(ctx, cio.LogFile("/tmp/clab/"+node.LongName+".log"))
+	if err != nil {
+		return nil, err
+	}
+	err = task.Start(ctx)
+	if err != nil {
+		return nil, err
+	}
 	log.Debugf("Container started: %s", node.LongName)
 
 	node.NSPath, err = c.GetNSPath(ctx, node.LongName)
@@ -308,13 +342,21 @@ func (c *ContainerdRuntime) CreateContainer(ctx context.Context, node *types.Nod
 		}
 		result, _ := current.NewResultFromResult(res)
 
-		ipv4, ipv6 := "", ""
+		// set DNS configuration defined in topology
+		if node.DNS != nil {
+			result.DNS.Nameservers = node.DNS.Servers
+			result.DNS.Options = node.DNS.Options
+			result.DNS.Search = node.DNS.Search
+		}
+
+		ipv4, ipv6, ipv4Gw := "", "", ""
 		ipv4nm, ipv6nm := 0, 0
 		for _, ip := range result.IPs {
 			switch ip.Version {
 			case "4":
 				ipv4 = ip.Address.IP.String()
 				ipv4nm, _ = ip.Address.Mask.Size()
+				ipv4Gw = ip.Gateway.String()
 			case "6":
 				ipv6 = ip.Address.IP.String()
 				ipv6nm, _ = ip.Address.Mask.Size()
@@ -326,6 +368,7 @@ func (c *ContainerdRuntime) CreateContainer(ctx context.Context, node *types.Nod
 			"clab.ipv4.netmask": strconv.Itoa(ipv4nm),
 			"clab.ipv6.addr":    ipv6,
 			"clab.ipv6.netmask": strconv.Itoa(ipv6nm),
+			"clab.ipv4.gateway": ipv4Gw,
 		}
 		_, err = newContainer.SetLabels(ctx, additionalLabels)
 		if err != nil {
@@ -333,6 +376,26 @@ func (c *ContainerdRuntime) CreateContainer(ctx context.Context, node *types.Nod
 		}
 	}
 	return nil, nil
+}
+
+func (c *ContainerdRuntime) PauseContainer(ctx context.Context, cID string) error {
+	ctask, err := c.getContainerTask(ctx, cID)
+	if err != nil {
+		return err
+	}
+
+	err = ctask.Pause(ctx)
+	return err
+}
+
+func (c *ContainerdRuntime) UnpauseContainer(ctx context.Context, cID string) error {
+	ctask, err := c.getContainerTask(ctx, cID)
+	if err != nil {
+		return err
+	}
+
+	err = ctask.Resume(ctx)
+	return err
 }
 
 func cniInit(cId, ifName string, mgmtNet *types.MgmtNet) (*libcni.CNIConfig, *libcni.NetworkConfigList, *libcni.RuntimeConf, error) {
@@ -422,26 +485,10 @@ func WithSysctls(sysctls map[string]string) oci.SpecOpts {
 	}
 }
 
-func (c *ContainerdRuntime) StartContainer(ctx context.Context, containername string) error {
-	container, err := c.client.LoadContainer(ctx, containername)
-	if err != nil {
-		return err
-	}
-	task, err := container.NewTask(ctx, cio.LogFile("/tmp/clab/"+containername+".log"))
-	if err != nil {
-		return err
-	}
-	err = task.Start(ctx)
-	if err != nil {
-		return err
-	}
-	return nil
-}
 func (c *ContainerdRuntime) StopContainer(ctx context.Context, containername string) error {
 	ctask, err := c.getContainerTask(ctx, containername)
 	if err != nil {
-		log.Debugf("container %s: %v", containername, err)
-		return nil
+		return err
 	}
 	taskstatus, err := ctask.Status(ctx)
 	if err != nil {
@@ -509,7 +556,7 @@ func (c *ContainerdRuntime) getContainerTask(ctx context.Context, containername 
 	return cont.Task(ctx, nil)
 }
 
-func (c *ContainerdRuntime) ListContainers(ctx context.Context, filter []*types.GenericFilter) ([]types.GenericContainer, error) {
+func (c *ContainerdRuntime) ListContainers(ctx context.Context, filter []*types.GenericFilter) ([]runtime.GenericContainer, error) {
 	log.Debug("listing containers")
 	ctx = namespaces.WithNamespace(ctx, containerdNamespace)
 
@@ -522,13 +569,13 @@ func (c *ContainerdRuntime) ListContainers(ctx context.Context, filter []*types.
 	return c.produceGenericContainerList(ctx, containerlist)
 }
 
-// TODO this will probably not work. need to work out the exact filter format
-func (c *ContainerdRuntime) GetContainer(ctx context.Context, containerID string) (*types.GenericContainer, error) {
-	var ctr *types.GenericContainer
+// GetContainer TODO this will probably not work. need to work out the exact filter format.
+func (c *ContainerdRuntime) GetContainer(ctx context.Context, containerID string) (*runtime.GenericContainer, error) {
+	var ctr *runtime.GenericContainer
 	gFilter := types.GenericFilter{
 		FilterType: "name",
 		Field:      "",
-		Operator:   "",
+		Operator:   "=",
 		Match:      containerID,
 	}
 	ctrs, err := c.ListContainers(ctx, []*types.GenericFilter{&gFilter})
@@ -565,20 +612,24 @@ func (*ContainerdRuntime) buildFilterString(filter []*types.GenericFilter) strin
 			if !isExistsOperator {
 				filterstring = filterstring + operator + "\"" + filterEntry.Match + "\"" + delim
 			}
-
-		} // more might be implemented later
+		} else if filterEntry.FilterType == "name" {
+			match := strings.TrimRight(strings.TrimLeft(filterEntry.Match, "^"), "$")
+			filterstring = "id==" + match
+		}
 	}
 	log.Debug("Filterstring: " + filterstring)
 	return filterstring
 }
 
-// Transform docker-specific to generic container format
-func (*ContainerdRuntime) produceGenericContainerList(ctx context.Context, input []containerd.Container) ([]types.GenericContainer, error) {
-	var result []types.GenericContainer
+// Transform docker-specific to generic container format.
+func (c *ContainerdRuntime) produceGenericContainerList(ctx context.Context,
+	input []containerd.Container,
+) ([]runtime.GenericContainer, error) {
+	var result []runtime.GenericContainer
 
 	for _, i := range input {
 
-		ctr := types.GenericContainer{}
+		ctr := runtime.GenericContainer{}
 
 		info, err := i.Info(ctx)
 		if err != nil {
@@ -590,6 +641,7 @@ func (*ContainerdRuntime) produceGenericContainerList(ctx context.Context, input
 		ctr.ShortID = ctr.ID
 		ctr.Image = info.Image
 		ctr.Labels = info.Labels
+		ctr.SetRuntime(c)
 
 		ctr.NetworkSettings, err = extractIPInfoFromLabels(ctr.Labels)
 		if err != nil {
@@ -620,12 +672,12 @@ func (*ContainerdRuntime) produceGenericContainerList(ctx context.Context, input
 			case containerd.Running:
 				ctr.Status = "Up"
 			default:
-				ctr.Status = strings.Title(string(status.Status))
+				ctr.Status = cases.Title(language.English).String(ctr.State)
 			}
 
 			ctr.Pid = int(task.Pid())
 		} else {
-			ctr.State = strings.Title(string(containerd.Unknown))
+			ctr.State = cases.Title(language.English).String(string(containerd.Unknown))
 			ctr.Status = "Unknown"
 			ctr.Pid = -1
 		}
@@ -634,23 +686,27 @@ func (*ContainerdRuntime) produceGenericContainerList(ctx context.Context, input
 	return result, nil
 }
 
-func extractIPInfoFromLabels(labels map[string]string) (types.GenericMgmtIPs, error) {
+func extractIPInfoFromLabels(labels map[string]string) (runtime.GenericMgmtIPs, error) {
 	var ipv4mask int
 	var ipv6mask int
 	var err error
 	if val, exists := labels["clab.ipv4.netmask"]; exists {
 		ipv4mask, err = strconv.Atoi(val)
 		if err != nil {
-			return types.GenericMgmtIPs{}, err
+			return runtime.GenericMgmtIPs{}, err
 		}
 	}
 	if val, exists := labels["clab.ipv6.netmask"]; exists {
 		ipv6mask, err = strconv.Atoi(val)
 		if err != nil {
-			return types.GenericMgmtIPs{}, err
+			return runtime.GenericMgmtIPs{}, err
 		}
 	}
-	return types.GenericMgmtIPs{IPv4addr: labels["clab.ipv4.addr"], IPv4pLen: ipv4mask, IPv6addr: labels["clab.ipv6.addr"], IPv6pLen: ipv6mask}, nil
+	return runtime.GenericMgmtIPs{
+		IPv4addr: labels["clab.ipv4.addr"], IPv4pLen: ipv4mask,
+		IPv6addr: labels["clab.ipv6.addr"], IPv6pLen: ipv6mask, IPv4Gw: labels["clab.ipv4.gateway"],
+		IPv6Gw: labels["clab.ipv6.gateway"],
+	}, nil
 }
 
 func timeSinceInHuman(since time.Time) string {
@@ -665,22 +721,25 @@ func (c *ContainerdRuntime) GetNSPath(ctx context.Context, containername string)
 	}
 	return "/proc/" + strconv.Itoa(int(task.Pid())) + "/ns/net", nil
 }
-func (c *ContainerdRuntime) Exec(ctx context.Context, containername string, cmd []string) ([]byte, []byte, error) {
-	return c.internalExec(ctx, containername, cmd, false)
+
+func (c *ContainerdRuntime) Exec(ctx context.Context, containername string, exec *exec.ExecCmd) (*exec.ExecResult, error) {
+	return c.internalExec(ctx, containername, exec, false)
 }
 
-func (c *ContainerdRuntime) ExecNotWait(ctx context.Context, containername string, cmd []string) error {
-	_, _, err := c.internalExec(ctx, containername, cmd, true)
+func (c *ContainerdRuntime) ExecNotWait(ctx context.Context, containername string, exec *exec.ExecCmd) error {
+	_, err := c.internalExec(ctx, containername, exec, true)
 	return err
 }
 
-func (c *ContainerdRuntime) internalExec(ctx context.Context, containername string, cmd []string, detach bool) ([]byte, []byte, error) { //skipcq: RVV-A0005
+func (c *ContainerdRuntime) internalExec(ctx context.Context, containername string,
+	execCmd *exec.ExecCmd, detach bool,
+) (*exec.ExecResult, error) { // skipcq: RVV-A0005
 
 	clabExecId := "clabexec"
 	ctx = namespaces.WithNamespace(ctx, containerdNamespace)
 	container, err := c.client.LoadContainer(ctx, containername)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var stdinbuf, stdoutbuf, stderrbuf bytes.Buffer
@@ -690,14 +749,14 @@ func (c *ContainerdRuntime) internalExec(ctx context.Context, containername stri
 
 	spec, err := container.Spec(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	pspec := spec.Process
 	pspec.Terminal = false
-	pspec.Args = cmd
+	pspec.Args = execCmd.GetCmd()
 	task, err := container.Task(ctx, nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	needToDelete := true
@@ -710,14 +769,14 @@ func (c *ContainerdRuntime) internalExec(ctx context.Context, containername stri
 		log.Debugf("Deleting old process with exec-id %s", clabExecId)
 		_, err := p.Delete(ctx, containerd.WithProcessKill)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
 
 	process, err := task.Exec(ctx, clabExecId, pspec, ioCreator)
 	// task, err := container.NewTask(ctx, cio.NewCreator(cio_opt))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var statusC <-chan containerd.ExitStatus
@@ -736,23 +795,32 @@ func (c *ContainerdRuntime) internalExec(ctx context.Context, containername stri
 
 		statusC, err = process.Wait(ctx)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
 
 	if err := process.Start(ctx); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+
+	execResult := exec.NewExecResult(execCmd)
+
 	if !detach {
 		status := <-statusC
 		code, _, err := status.Result()
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 
 		log.Infof("Exit code: %d", code)
+		intCode, _ := strconv.Atoi(fmt.Sprint(code))
+
+		execResult.SetReturnCode(intCode)
+		execResult.SetStdErr(stderrbuf.Bytes())
+		execResult.SetStdOut(stdoutbuf.Bytes())
 	}
-	return stdoutbuf.Bytes(), stderrbuf.Bytes(), nil
+
+	return execResult, nil
 }
 
 func (c *ContainerdRuntime) DeleteContainer(ctx context.Context, containerID string) error {
@@ -764,7 +832,7 @@ func (c *ContainerdRuntime) DeleteContainer(ctx context.Context, containerID str
 		return err
 	}
 
-	cnic, cncl, cnirc, err := cniInit(containerID, "eth0", c.Mgmt)
+	cnic, cncl, cnirc, err := cniInit(containerID, "eth0", c.mgmt)
 	if err != nil {
 		return err
 	}
@@ -788,4 +856,31 @@ func (c *ContainerdRuntime) DeleteContainer(ctx context.Context, containerID str
 	log.Debugf("successfully deleted container %s", containerID)
 
 	return nil
+}
+
+// GetHostsPath returns fs path to a file which is mounted as /etc/hosts into a given container
+// TODO: do we need it here? currently no-op.
+func (c *ContainerdRuntime) GetHostsPath(context.Context, string) (string, error) {
+	return "", nil
+}
+
+// GetContainerStatus retrieves the ContainerStatus of the named container.
+func (c *ContainerdRuntime) GetContainerStatus(ctx context.Context, cID string) runtime.ContainerStatus {
+	task, err := c.getContainerTask(ctx, cID)
+	if err != nil {
+		return runtime.NotFound
+	}
+
+	status, err := task.Status(ctx)
+	if err != nil {
+		return runtime.NotFound
+	}
+
+	switch status.Status {
+	case containerd.Running:
+		return runtime.Running
+	case containerd.Created, containerd.Paused, containerd.Pausing, containerd.Stopped, containerd.Unknown:
+		return runtime.Stopped
+	}
+	return runtime.NotFound
 }

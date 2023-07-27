@@ -12,6 +12,7 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
+	"github.com/srl-labs/containerlab/nodes/srl"
 	"github.com/srl-labs/containerlab/types"
 	"github.com/srl-labs/containerlab/utils"
 	"github.com/vishvananda/netlink"
@@ -26,7 +27,7 @@ type vEthEndpoint struct {
 	OvsBridge string // ovs-bridge name a veth is destined to be connected to
 }
 
-// CreateVirtualWiring creates the virtual topology between the containers
+// CreateVirtualWiring creates the virtual topology between the containers.
 func (c *CLab) CreateVirtualWiring(l *types.Link) (err error) {
 	log.Infof("Creating virtual wire: %s:%s <--> %s:%s", l.A.Node.ShortName, l.A.EndpointName, l.B.Node.ShortName, l.B.EndpointName)
 
@@ -93,29 +94,119 @@ func (c *CLab) CreateVirtualWiring(l *types.Link) (err error) {
 		return err
 	}
 
-	// create veth pair in the root netns
-	vA.Link, vB.Link, err = createVethIface(ARndmName, BRndmName, l.MTU, aMAC, bMAC)
-	if err != nil {
-		return err
+	// if one of the endpoints is a macvlan interface
+	// we need to create a macvlan interface in the root netns
+	if l.A.Node.Kind == "macvlan" || l.B.Node.Kind == "macvlan" {
+		// make sure the macvlan is always the B side
+		if l.A.Node.Kind == "macvlan" {
+			tmp := l.A
+			l.A = l.B
+			l.B = tmp
+		}
+
+		link, err := createMACVLANInterface(ARndmName, l.B.EndpointName, l.MTU, aMAC)
+		if err != nil {
+			return err
+		}
+
+		err = toNS(l.A.Node.NSPath, link, l.A.EndpointName)
+		if err != nil {
+			return err
+		}
+
+		// SR Linux brings down non-veth interfaces, so we have to force them up after SR Linux is started.
+		for _, kn := range srl.KindNames {
+			if l.A.Node.Kind == kn {
+				l.A.Node.Exec = append([]string{fmt.Sprintf("ip l set dev %s up", l.A.EndpointName)}, l.A.Node.Exec...)
+			}
+		}
+
+	} else {
+
+		// create veth pair in the root netns
+		vA.Link, vB.Link, err = createVethIface(ARndmName, BRndmName, l.MTU, aMAC, bMAC)
+		if err != nil {
+			return err
+		}
+
+		// once veth pair is created, disable tx offload for veth pair
+		if err := utils.EthtoolTXOff(ARndmName); err != nil {
+			return err
+		}
+		if err := utils.EthtoolTXOff(BRndmName); err != nil {
+			return err
+		}
+
+		if err = vA.setVethLink(); err != nil {
+			_ = netlink.LinkDel(vA.Link)
+			return err
+		}
+		if err = vB.setVethLink(); err != nil {
+			_ = netlink.LinkDel(vB.Link)
+		}
 	}
 
-	// once veth pair is created, disable tx offload for veth pair
-	if err := utils.EthtoolTXOff(ARndmName); err != nil {
-		return err
-	}
-	if err := utils.EthtoolTXOff(BRndmName); err != nil {
-		return err
-	}
-
-	if err = vA.setVethLink(); err != nil {
-		_ = netlink.LinkDel(vA.Link)
-		return err
-	}
-	if err = vB.setVethLink(); err != nil {
-		_ = netlink.LinkDel(vB.Link)
-	}
 	return err
+}
 
+// RemoveHostOrBridgeVeth tries to remove veths connected to the host network namespace or a linux bridge
+// and does nothing in case they are not found.
+func (c *CLab) RemoveHostOrBridgeVeth(l *types.Link) (err error) {
+	switch {
+	case l.A.Node.Kind == "host" || l.A.Node.Kind == "bridge":
+		link, err := netlink.LinkByName(l.A.EndpointName)
+		if err != nil {
+			log.Debugf("Link %q is already gone: %v", l.A.EndpointName, err)
+			break
+		}
+
+		log.Debugf("Cleaning up virtual wire: %s:%s <--> %s:%s", l.A.Node.ShortName,
+			l.A.EndpointName, l.B.Node.ShortName, l.B.EndpointName)
+
+		err = netlink.LinkDel(link)
+		if err != nil {
+			log.Debugf("Link %q is already gone: %v", l.A.EndpointName, err)
+		}
+	case l.B.Node.Kind == "host" || l.B.Node.Kind == "bridge":
+		link, err := netlink.LinkByName(l.B.EndpointName)
+		if err != nil {
+			log.Debugf("Link %q is already gone: %v", l.B.EndpointName, err)
+			break
+		}
+
+		log.Debugf("Cleaning up virtual wire: %s:%s <--> %s:%s", l.A.Node.ShortName,
+			l.A.EndpointName, l.B.Node.ShortName, l.B.EndpointName)
+
+		err = netlink.LinkDel(link)
+		if err != nil {
+			log.Debugf("Link %q is already gone: %v", l.B.EndpointName, err)
+		}
+	}
+	return nil
+}
+
+// createMACVLANInterface creates a macvlan interface in the root netns.
+func createMACVLANInterface(ifName, parentIfName string, mtu int, MAC net.HardwareAddr) (netlink.Link, error) {
+	parentInterface, err := netlink.LinkByName(parentIfName)
+	if err != nil {
+		return nil, err
+	}
+
+	mvl := &netlink.Macvlan{
+		LinkAttrs: netlink.LinkAttrs{
+			Name:         ifName,
+			ParentIndex:  parentInterface.Attrs().Index,
+			HardwareAddr: MAC,
+		},
+		Mode: netlink.MACVLAN_MODE_BRIDGE,
+	}
+
+	err = netlink.LinkAdd(mvl)
+	if err != nil {
+		return nil, err
+	}
+
+	return mvl, nil
 }
 
 // createVethIface takes two veth endpoint structs and create a veth pair and return
@@ -143,7 +234,7 @@ func createVethIface(ifName, peerName string, mtu int, aMAC, bMAC net.HardwareAd
 	return
 }
 
-// setVethLink sets the veth link endpoints to the relevant namespaces and/or connects one end to the bridge
+// setVethLink sets the veth link endpoints to the relevant namespaces and/or connects one end to the bridge.
 func (veth *vEthEndpoint) setVethLink() error {
 	// if veth is destined to connect to a linux bridge in the host netns
 	if veth.Bridge != "" {
@@ -165,26 +256,30 @@ func (veth *vEthEndpoint) setVethLink() error {
 	return veth.toNS()
 }
 
-// vethToNS puts a veth endpoint to a given netns and renames its random name to a desired name
+// toNS puts a veth endpoint to a given netns and renames its random name to a desired name.
 func (veth *vEthEndpoint) toNS() error {
+	return toNS(veth.NSPath, veth.Link, veth.LinkName)
+}
+
+func toNS(nsPath string, link netlink.Link, expectedName string) error {
 	var vethNS ns.NetNS
 	var err error
-	if vethNS, err = ns.GetNS(veth.NSPath); err != nil {
+	if vethNS, err = ns.GetNS(nsPath); err != nil {
 		return err
 	}
 	// move veth endpoint to namespace
-	if err = netlink.LinkSetNsFd(veth.Link, int(vethNS.Fd())); err != nil {
+	if err = netlink.LinkSetNsFd(link, int(vethNS.Fd())); err != nil {
 		return err
 	}
 	err = vethNS.Do(func(_ ns.NetNS) error {
-		if err = netlink.LinkSetName(veth.Link, veth.LinkName); err != nil {
+		if err = netlink.LinkSetName(link, expectedName); err != nil {
 			return fmt.Errorf(
 				"failed to rename link: %v", err)
 		}
 
-		if err = netlink.LinkSetUp(veth.Link); err != nil {
+		if err = netlink.LinkSetUp(link); err != nil {
 			return fmt.Errorf("failed to set %q up: %v",
-				veth.LinkName, err)
+				expectedName, err)
 		}
 		return nil
 	})
@@ -217,27 +312,12 @@ func (veth *vEthEndpoint) toBridge() error {
 	return err
 }
 
-// DeleteNetnsSymlinks deletes the symlink file created for each container netns
-func (c *CLab) DeleteNetnsSymlinks() (err error) {
-	for _, node := range c.Nodes {
-		if node.Config().Kind != "bridge" {
-			log.Debugf("Deleting %s network namespace", node.Config().LongName)
-			if err := utils.DeleteNetnsSymlink(node.Config().LongName); err != nil {
-				return err
-			}
-		}
-
-	}
-
-	return nil
-}
-
 func genIfName() string {
 	s, _ := uuid.New().MarshalText() // .MarshalText() always return a nil error
 	return string(s[:8])
 }
 
-// GetLinksByNamePrefix returns a list of links whose name matches a prefix
+// GetLinksByNamePrefix returns a list of links whose name matches a prefix.
 func GetLinksByNamePrefix(prefix string) ([]netlink.Link, error) {
 	// filtered list of interfaces
 	if prefix == "" {

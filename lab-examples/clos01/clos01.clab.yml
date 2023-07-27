@@ -1,4 +1,4 @@
-# topology documentation: http://containerlab.srlinux.dev/lab-examples/min-clos/
+# topology documentation: http://containerlab.dev/lab-examples/min-clos/
 name: clos01
 
 topology:
@@ -16,7 +16,7 @@ topology:
       type: ixrd2
     spine:
       kind: srl
-      type: ixr6
+      type: ixrd3
     client1:
       kind: linux
     client2:

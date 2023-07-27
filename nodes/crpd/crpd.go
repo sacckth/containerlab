@@ -8,125 +8,121 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"io/ioutil"
 	"os"
-	"path"
 	"path/filepath"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/srl-labs/containerlab/clab/exec"
 	"github.com/srl-labs/containerlab/nodes"
-	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/types"
 	"github.com/srl-labs/containerlab/utils"
 )
 
+const (
+	licDir = "/config/license/safenet"
+)
+
 var (
+	kindnames = []string{"crpd", "juniper_crpd"}
 	//go:embed crpd.cfg
-	cfgTemplate string
+	defaultCfgTemplate string
 
 	//go:embed sshd_config
 	sshdCfg string
 
-	saveCmd = []string{"cli", "show", "conf"}
+	defaultCredentials = nodes.NewCredentials("root", "clab123")
+
+	saveCmd       = "cli show conf"
+	sshRestartCmd = "service ssh restart"
 )
 
-func init() {
-	nodes.Register(nodes.NodeKindCRPD, func() nodes.Node {
+// Register registers the node in the NodeRegistry.
+func Register(r *nodes.NodeRegistry) {
+	r.Register(kindnames, func() nodes.Node {
 		return new(crpd)
-	})
+	}, defaultCredentials)
 }
 
 type crpd struct {
-	cfg     *types.NodeConfig
-	runtime runtime.ContainerRuntime
+	nodes.DefaultNode
 }
 
 func (s *crpd) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
-	s.cfg = cfg
+	// Init DefaultNode
+	s.DefaultNode = *nodes.NewDefaultNode(s)
+
+	s.Cfg = cfg
 	for _, o := range opts {
 		o(s)
 	}
 
 	// mount config and log dirs
-	s.cfg.Binds = append(s.cfg.Binds,
-		fmt.Sprint(path.Join(s.cfg.LabDir, "config"), ":/config"),
-		fmt.Sprint(path.Join(s.cfg.LabDir, "log"), ":/var/log"),
+	s.Cfg.Binds = append(s.Cfg.Binds,
+		fmt.Sprint(filepath.Join(s.Cfg.LabDir, "config"), ":/config"),
+		fmt.Sprint(filepath.Join(s.Cfg.LabDir, "log"), ":/var/log"),
 		// mount sshd_config
-		fmt.Sprint(path.Join(s.cfg.LabDir, "config/sshd_config"), ":/etc/ssh/sshd_config"),
+		fmt.Sprint(filepath.Join(s.Cfg.LabDir, "config/sshd_config"), ":/etc/ssh/sshd_config"),
 	)
 
 	return nil
 }
-func (s *crpd) Config() *types.NodeConfig { return s.cfg }
 
-func (s *crpd) PreDeploy(_, _, _ string) error {
-	utils.CreateDirectory(s.cfg.LabDir, 0777)
-	return createCRPDFiles(s.cfg)
+func (s *crpd) PreDeploy(_ context.Context, params *nodes.PreDeployParams) error {
+	utils.CreateDirectory(s.Cfg.LabDir, 0777)
+	_, err := s.LoadOrGenerateCertificate(params.Cert, params.TopologyName)
+	if err != nil {
+		return nil
+	}
+	return createCRPDFiles(s)
 }
 
-func (s *crpd) Deploy(ctx context.Context) error {
-	_, err := s.runtime.CreateContainer(ctx, s.cfg)
-	return err
-}
+func (s *crpd) PostDeploy(ctx context.Context, _ *nodes.PostDeployParams) error {
+	log.Debugf("Running postdeploy actions for CRPD %q node", s.Cfg.ShortName)
 
-func (s *crpd) PostDeploy(ctx context.Context, _ map[string]nodes.Node) error {
-	log.Debugf("Running postdeploy actions for CRPD %q node", s.cfg.ShortName)
-	_, stderr, err := s.runtime.Exec(ctx, s.cfg.ContainerID, []string{"service", "ssh", "restart"})
+	cmd, _ := exec.NewExecCmdFromString(sshRestartCmd)
+	execResult, err := s.RunExec(ctx, cmd)
 	if err != nil {
 		return err
 	}
 
-	if len(stderr) > 0 {
-		return fmt.Errorf("crpd post-deploy failed: %s", string(stderr))
+	if len(execResult.GetStdErrString()) > 0 {
+		return fmt.Errorf("crpd post-deploy failed: %s", execResult.GetStdErrString())
 	}
 
 	return err
 }
 
-func (s *crpd) GetImages() map[string]string {
-	return map[string]string{
-		nodes.ImageKey: s.cfg.Image,
-	}
-}
-
-func (*crpd) WithMgmtNet(*types.MgmtNet)               {}
-func (s *crpd) WithRuntime(r runtime.ContainerRuntime) { s.runtime = r }
-func (s *crpd) GetRuntime() runtime.ContainerRuntime   { return s.runtime }
-
-func (s *crpd) Delete(ctx context.Context) error {
-	return s.runtime.DeleteContainer(ctx, s.Config().LongName)
-}
-
 func (s *crpd) SaveConfig(ctx context.Context) error {
-	stdout, stderr, err := s.runtime.Exec(ctx, s.cfg.LongName, saveCmd)
+	cmd, _ := exec.NewExecCmdFromString(saveCmd)
+	execResult, err := s.RunExec(ctx, cmd)
 	if err != nil {
-		return fmt.Errorf("%s: failed to execute cmd: %v", s.cfg.ShortName, err)
+		return err
 	}
 
-	if len(stderr) > 0 {
-		return fmt.Errorf("%s errors: %s", s.cfg.ShortName, string(stderr))
+	if len(execResult.GetStdErrString()) > 0 {
+		return fmt.Errorf("crpd post-deploy failed: %s", execResult.GetStdErrString())
 	}
 
 	// path by which to save a config
-	confPath := s.cfg.LabDir + "/config/juniper.conf"
-	err = ioutil.WriteFile(confPath, stdout, 0777)
+	confPath := s.Cfg.LabDir + "/config/juniper.conf"
+	err = os.WriteFile(confPath, execResult.GetStdOutByteSlice(), 0777) // skipcq: GO-S2306
 	if err != nil {
-		return fmt.Errorf("failed to write config by %s path from %s container: %v", confPath, s.cfg.ShortName, err)
+		return fmt.Errorf("failed to write config by %s path from %s container: %v", confPath, s.Cfg.ShortName, err)
 	}
-	log.Infof("saved cRPD configuration from %s node to %s\n", s.cfg.ShortName, confPath)
+	log.Infof("saved cRPD configuration from %s node to %s\n", s.Cfg.ShortName, confPath)
 
 	return nil
 }
 
-///
-
-func createCRPDFiles(nodeCfg *types.NodeConfig) error {
+func createCRPDFiles(node nodes.Node) error {
+	nodeCfg := node.Config()
 	// create config and logs directory that will be bind mounted to crpd
-	utils.CreateDirectory(path.Join(nodeCfg.LabDir, "config"), 0777)
-	utils.CreateDirectory(path.Join(nodeCfg.LabDir, "log"), 0777)
+	utils.CreateDirectory(filepath.Join(nodeCfg.LabDir, "config"), 0777)
+	utils.CreateDirectory(filepath.Join(nodeCfg.LabDir, "log"), 0777)
 
 	// copy crpd config from default template or user-provided conf file
 	cfg := filepath.Join(nodeCfg.LabDir, "/config/juniper.conf")
+	var cfgTemplate string
 
 	if nodeCfg.StartupConfig != "" {
 		c, err := os.ReadFile(nodeCfg.StartupConfig)
@@ -136,7 +132,11 @@ func createCRPDFiles(nodeCfg *types.NodeConfig) error {
 		cfgTemplate = string(c)
 	}
 
-	err := nodeCfg.GenerateConfig(cfg, cfgTemplate)
+	if cfgTemplate == "" {
+		cfgTemplate = defaultCfgTemplate
+	}
+
+	err := node.GenerateConfig(cfg, cfgTemplate)
 	if err != nil {
 		log.Errorf("node=%s, failed to generate config: %v", nodeCfg.ShortName, err)
 	}
@@ -152,7 +152,12 @@ func createCRPDFiles(nodeCfg *types.NodeConfig) error {
 	if nodeCfg.License != "" {
 		// copy license file to node specific lab directory
 		src := nodeCfg.License
-		dst = filepath.Join(nodeCfg.LabDir, "/config/license/safenet/junos_sfnt.lic")
+		dst = filepath.Join(nodeCfg.LabDir, licDir, "junos_sfnt.lic")
+
+		if err := os.MkdirAll(filepath.Join(nodeCfg.LabDir, licDir), 0777); err != nil { // skipcq: GSC-G301
+			return err
+		}
+
 		if err = utils.CopyFile(src, dst, 0644); err != nil {
 			return fmt.Errorf("file copy [src %s -> dst %s] failed %v", src, dst, err)
 		}

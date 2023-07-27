@@ -7,7 +7,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// An interface to implement kind specific methods for transactions and prompt checking
+// SSHKind is an interface to implement kind specific methods for transactions and prompt checking.
 type SSHKind interface {
 	// Start a config transaction
 	ConfigStart(s *SSHTransport, transaction bool) error
@@ -23,12 +23,12 @@ type SSHKind interface {
 	PromptParse(s *SSHTransport, in *string) *SSHReply
 }
 
-// implements SShKind
+// VrSrosSSHKind implements SShKind.
 type VrSrosSSHKind struct{}
 
-func (*VrSrosSSHKind) ConfigStart(s *SSHTransport, transaction bool) error { //skipcq: RVV-A0005
+func (*VrSrosSSHKind) ConfigStart(s *SSHTransport, transaction bool) error { // skipcq: RVV-A0005
 	s.PromptChar = "#" // ensure it's '#'
-	//s.debug = true
+	// s.debug = true
 	r := s.Run("/environment more false", 5)
 	if r.result != "" {
 		log.Warnf("%s Are you in MD-Mode?%s", s.Target, r.LogString(s.Target, true, false))
@@ -40,6 +40,7 @@ func (*VrSrosSSHKind) ConfigStart(s *SSHTransport, transaction bool) error { //s
 	}
 	return nil
 }
+
 func (*VrSrosSSHKind) ConfigCommit(s *SSHTransport) (*SSHReply, error) {
 	res := s.Run("commit", 10)
 	if res.result != "" {
@@ -60,10 +61,10 @@ func (*VrSrosSSHKind) PromptParse(s *SSHTransport, in *string) *SSHReply {
 	return nil
 }
 
-// implements SShKind
+// SrlSSHKind implements SShKind.
 type SrlSSHKind struct{}
 
-func (*SrlSSHKind) ConfigStart(s *SSHTransport, transaction bool) error { //skipcq: RVV-A0005
+func (*SrlSSHKind) ConfigStart(s *SSHTransport, transaction bool) error { // skipcq: RVV-A0005
 	s.PromptChar = "#" // ensure it's '#'
 	if transaction {
 		r0 := s.Run("enter candidate private", 5)
@@ -92,7 +93,7 @@ func (*SrlSSHKind) PromptParse(s *SSHTransport, in *string) *SSHReply {
 }
 
 // This is a helper function to parse the prompt, and can be used by SSHKind's ParsePrompt
-// Used in SRL today
+// Used in SRL today.
 func promptParseNoSpaces(in *string, promptChar string, lines int) *SSHReply {
 	n := strings.LastIndex(*in, "\n")
 	if n < 0 {

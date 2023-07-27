@@ -1,7 +1,7 @@
 FROM alpine:3
 
 LABEL maintainer="Roman Dodin <dodin.roman@gmail.com>"
-LABEL documentation="https://containerlab.srlinux.dev"
+LABEL documentation="https://containerlab.dev"
 LABEL repo="https://github.com/srl-labs/containerlab"
 
 RUN apk add --no-cache bash \
@@ -10,6 +10,7 @@ RUN apk add --no-cache bash \
 	git \
 	openssh \
 	make \
+	iptables \
 	device-mapper \
 	e2fsprogs-extra
 

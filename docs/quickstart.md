@@ -1,21 +1,27 @@
-<script type="text/javascript" src="https://cdn.jsdelivr.net/gh/hellt/drawio-js@main/embed2.js" async></script>
+---
+hide:
+  - navigation
+---
+<script type="text/javascript" src="https://viewer.diagrams.net/js/viewer-static.min.js" async></script>
 
 ## Installation
+
 Getting containerlab is as easy as it gets. Thanks to the trivial [installation](install.md) procedure it can be set up in a matter of a few seconds on any RHEL or Debian based OS[^1].
 
 ```bash
 # download and install the latest release (may require sudo)
-bash -c "$(curl -sL https://get-clab.srlinux.dev)"
+bash -c "$(curl -sL https://get.containerlab.dev)"
 ```
 
 ## Topology definition file
+
 Once installed, containerlab manages the labs defined in the so-called topology definition, [`clab` files](manual/topo-def-file.md). A user can write a topology definition file from scratch, or start with looking at [various lab examples](lab-examples/lab-examples.md) we provide within the containerlab package.
 
 In this quickstart we will be using [one of the provided labs](lab-examples/srl-ceos.md) which consists of Nokia SR Linux and Arista cEOS nodes connected one to another.
 
 <div class="mxgraph" style="max-width:100%;border:1px solid transparent;margin:0 auto; display:block;" data-mxgraph="{&quot;page&quot;:2,&quot;zoom&quot;:1.5,&quot;highlight&quot;:&quot;#0000ff&quot;,&quot;nav&quot;:true,&quot;check-visible-state&quot;:true,&quot;resize&quot;:true,&quot;url&quot;:&quot;https://raw.githubusercontent.com/srl-labs/containerlab/diagrams/srlceos01.drawio&quot;}"></div>
 
-The lab topology is defined in the [srlceos01.clab.yml](https://github.com/srl-labs/containerlab/blob/master/lab-examples/srlceos01/srlceos01.clab.yml) file. To make use of this lab example, we first may want to copy the corresponding lab files to some directory:
+The lab topology is defined in the [srlceos01.clab.yml](https://github.com/srl-labs/containerlab/blob/main/lab-examples/srlceos01/srlceos01.clab.yml) file. To make use of this lab example, we first may want to copy the corresponding lab files to some directory:
 
 ```bash
 # create a directory for the lab
@@ -44,19 +50,19 @@ topology:
     - endpoints: ["srl:e1-1", "ceos:eth1"]
 ```
 
-
 A [topology definition deep-dive](manual/topo-def-file.md) document provides a complete reference of the topology definition syntax. In this quickstart we keep it short, glancing over the key components of the file:
 
 * Each lab has a `name`.
 * The lab topology is defined under the `topology` element.
 * Topology is a set of [`nodes`](manual/nodes.md) and [`links`](manual/topo-def-file.md#links) between them.
-* The nodes are always of a certain [`kind`](manual/kinds/kinds.md). The `kind` defines the node configuration and behavior.
-* Containerlab supports a fixed number of `kinds`. In the example above, the `srl` and `ceos` are one of the [supported kinds](manual/kinds/kinds.md).
+* The nodes are always of a certain [`kind`](manual/kinds/index.md). The `kind` defines the node configuration and behavior.
+* Containerlab supports a fixed number of `kinds`. In the example above, the `srl` and `ceos` are one of the [supported kinds](manual/kinds/index.md).
 * The actual [nodes](manual/nodes.md) of the topology are defined in the `nodes` section which holds a map of node names. In the example above, nodes with names `srl` and `ceos` are defined.
 * Node elements must have a `kind` parameter to indicate which kind this node belongs to. Under the nodes section you typically provide node-specific parameters. This lab uses a node-specific parameters - `image`.  
 * `nodes` are interconnected with `links`. Each `link` is [defined](manual/topo-def-file.md#links) by a set of `endpoints`.
 
 ## Container image
+
 One of node's most important properties is the container [`image`](manual/nodes.md#image) they use. In our example the nodes use a specific image which we imported upfront[^2].
 
 The image name follows the same rules as the images you use with, for example, Docker client.
@@ -66,7 +72,13 @@ The image name follows the same rules as the images you use with, for example, D
 
     For example: `docker tag srlinux:20.6.1-286 srlinux:latest`
 
+!!!warning "Images availability"
+    Quickstart lab includes Nokia SR Linux and Arista cEOS images. While Nokia SR Linux is a publicly available image and can be pulled by anyone, its counterpart Arista cEOS images needs to be downloaded by the users first.
+
+    This means that you have to login with Arista website and download the image, then import it to docker image store before proceeding with this lab. Or you can swap the ceos image with another SR Linux image and enjoy the freedom of labbing.
+
 ## Deploying a lab
+
 Now when we know what a basic topology file consists of and sorted out the container image name and node's license file, we can proceed with deploying this lab. To keep things easy and guessable, the command to deploy a lab is called [`deploy`](cmd/deploy.md).
 
 ```bash
@@ -80,9 +92,12 @@ REPOSITORY             TAG                 IMAGE ID            CREATED          
 ghcr.io/nokia/srlinux  latest              79019d14cfc7        3 months ago        1.32GB
 ceos                   4.25.0F             15a5f97fe8e8        3 months ago        1.76GB
 
-# start the lab deployment by referencing the topology file
-containerlab deploy --topo srlceos01.clab.yml
+# start the lab deployment
+containerlab deploy # (1)!
 ```
+
+1. `deploy` command will automatically lookup a file matching the `*.clab.y*ml` patter to select it.  
+  If you have several files and want to pick a specific one, use `--topo <path>` flag.
 
 After a couple of seconds you will see the summary of the deployed nodes:
 
@@ -98,11 +113,13 @@ After a couple of seconds you will see the summary of the deployed nodes:
 The node name presented in the summary table is the fully qualified node name, it is built using the following pattern: `clab-{{lab-name}}-{{node-name}}`.
 
 ## Connecting to the nodes
+
 Since the topology nodes are regular containers, you can connect to them just like to any other container.
 
 ```bash
 docker exec -it clab-srlceos01-srl1 bash
 ```
+
 !!!info
     For each supported kind we document the management interfaces and the ways to leverage them.  
     For example, `srl` kind documentation [provides](manual/kinds/srl.md) the commands to leverage SSH and gNMI interfaces.  
@@ -144,6 +161,7 @@ The following tab view aggregates the ways to get CLI access per the lab node:
     ```
 
 ## Destroying a lab
+
 To remove the lab, use the [`destroy`](cmd/destroy.md) command that takes a topology file as an argument:
 
 ```
@@ -151,6 +169,7 @@ containerlab destroy --topo srlceos01.clab.yml
 ```
 
 ## What next?
+
 To get a broader view on the containerlab features and components, refer to the **User manual** section.
 
 Do not forget to check out the [Lab examples](lab-examples/lab-examples.md) section where we provide complete and ready-to-run topology definition files. This is a great starting point to explore containerlab by doing.

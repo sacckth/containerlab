@@ -22,7 +22,7 @@ With this lightweight CLOS topology a user can exhibit the following scenarios:
 ## Configuration setup
 To help you get faster to the provisioning of the services on this mini fabric we added an auto-configuration script to this example.
 
-In order to make a fully deterministic lab setup we added another topology file called [setup.clos02.clab.yml][setup-topofile] where the management interfaces of each network node and clients are statically addressed with [`mgmt_ipv4/6` config option](../manual/nodes.md#mgmt_ipv4). Other than that, the topology files does not have any changes.
+In order to make a fully deterministic lab setup we added another topology file called [setup.clos02.clab.yml][setup-topofile] where the management interfaces of each network node and clients are statically addressed with [`mgmt-ipv4/6` config option](../manual/nodes.md#mgmt-ipv4). Other than that, the topology files does not have any changes.
 
 ### Prerequisites
 The configuration of the fabric elements is carried out with [`gnmic` client](https://gnmic.kmrd.dev/install/), therefore it needs to be installed on the machine where you run the lab.
@@ -113,13 +113,13 @@ The following table outlines the addressing plan used in this lab:
 | client4     | eth0           | -           | `172.100.100.15/24` | `2001:172:100:100::15/64` |
 |             | eth1           | leaf4       | `10.0.0.31/31`      | `1000:10:0:0::31/127`     |
 
-Configuration snippets that are used to provision the nodes are contained within the [`configs`](https://github.com/srl-labs/containerlab/tree/master/lab-examples/clos02/configs) subdirectory.
+Configuration snippets that are used to provision the nodes are contained within the [`configs`](https://github.com/srl-labs/containerlab/tree/main/lab-examples/clos02/configs) subdirectory.
 
 [srl]: https://www.nokia.com/networks/products/service-router-linux-NOS/
-[topofile]: https://github.com/srl-labs/containerlab/tree/master/lab-examples/clos02/clos02.clab.yml
-[setup-topofile]: https://github.com/srl-labs/containerlab/tree/master/lab-examples/clos02/setup.clos02.clab.yml
-[setup-script]: https://github.com/srl-labs/containerlab/tree/master/lab-examples/clos02/setup.sh
+[topofile]: https://github.com/srl-labs/containerlab/tree/main/lab-examples/clos02/clos02.clab.yml
+[setup-topofile]: https://github.com/srl-labs/containerlab/tree/main/lab-examples/clos02/setup.clos02.clab.yml
+[setup-script]: https://github.com/srl-labs/containerlab/tree/main/lab-examples/clos02/setup.sh
 
 [^1]: Resource requirements are provisional. Consult with SR Linux Software Installation guide for additional information.
 
-<script type="text/javascript" src="https://cdn.jsdelivr.net/gh/hellt/drawio-js@main/embed2.js" async></script>
+<script type="text/javascript" src="https://viewer.diagrams.net/js/viewer-static.min.js" async></script>

@@ -16,12 +16,12 @@ import (
 	"github.com/srl-labs/containerlab/runtime"
 )
 
-// saveCmd represents the save command
+// saveCmd represents the save command.
 var saveCmd = &cobra.Command{
 	Use:   "save",
 	Short: "save containers configuration",
 	Long: `save performs a configuration save. The exact command that is used to save the config depends on the node kind.
-Refer to the https://containerlab.srlinux.dev/cmd/save/ documentation to see the exact command used per node's kind`,
+Refer to the https://containerlab.dev/cmd/save/ documentation to see the exact command used per node's kind`,
 	PreRunE: sudoCheck,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if name == "" && topo == "" {
@@ -30,6 +30,7 @@ Refer to the https://containerlab.srlinux.dev/cmd/save/ documentation to see the
 		opts := []clab.ClabOption{
 			clab.WithTimeout(timeout),
 			clab.WithTopoFile(topo, varsFile),
+			clab.WithNodeFilter(nodeFilter),
 			clab.WithRuntime(rt,
 				&runtime.RuntimeConfig{
 					Debug:            debug,
@@ -37,6 +38,7 @@ Refer to the https://containerlab.srlinux.dev/cmd/save/ documentation to see the
 					GracefulShutdown: graceful,
 				},
 			),
+			clab.WithDebug(debug),
 		}
 		c, err := clab.NewContainerLab(opts...)
 		if err != nil {
@@ -65,5 +67,7 @@ Refer to the https://containerlab.srlinux.dev/cmd/save/ documentation to see the
 }
 
 func init() {
+	saveCmd.Flags().StringSliceVarP(&nodeFilter, "node-filter", "", []string{},
+		"comma separated list of nodes to include")
 	rootCmd.AddCommand(saveCmd)
 }

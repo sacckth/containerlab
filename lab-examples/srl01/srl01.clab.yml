@@ -1,10 +1,10 @@
-# topology documentation: http://containerlab.srlinux.dev/lab-examples/single-srl/
+# topology documentation: http://containerlab.dev/lab-examples/single-srl/
 name: srl01
 
 topology:
   kinds:
     srl:
-      type: ixr6
+      type: ixrd3
       image: ghcr.io/nokia/srlinux
   nodes:
     srl:

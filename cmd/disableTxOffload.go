@@ -17,7 +17,7 @@ import (
 
 var cntName string
 
-// upgradeCmd represents the version command
+// upgradeCmd represents the version command.
 var disableTxOffloadCmd = &cobra.Command{
 	Use:   "disable-tx-offload",
 	Short: "disables tx checksum offload on eth0 interface of a container",
@@ -32,6 +32,7 @@ var disableTxOffloadCmd = &cobra.Command{
 					GracefulShutdown: graceful,
 				},
 			),
+			clab.WithDebug(debug),
 		}
 		c, err := clab.NewContainerLab(opts...)
 		if err != nil {

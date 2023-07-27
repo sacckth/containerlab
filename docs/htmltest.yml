@@ -12,6 +12,10 @@ IgnoreURLs:
   - https://github.com/srl-labs/containerlab/pkgs/container/clab
   - https://linkedin.com/in
   - https://www.linkedin.com/in
+  - https://*github.com/
+  - https://twitter.com/*
+  - mysocket.io # remove mysocket.io links until we rework to border0.com
+  - https://supportcenter.checkpoint.com/ # started to fail, meh.
 IgnoreDirectoryMissingTrailingSlash: true
 IgnoreAltMissing: true
 IgnoreSSLVerify: true
@@ -22,3 +26,5 @@ ExternalTimeout: 60
 HTTPHeaders:
   "Range": "bytes=0-10"
   "Accept": "*/*"
+CacheExpires: "168h"
+HTTPConcurrencyLimit: 1

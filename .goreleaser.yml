@@ -7,14 +7,20 @@ builds:
   - id: clab-bin
     env:
       - CGO_ENABLED=0
+    flags:
+      - -trimpath
+      - -tags=podman exclude_graphdriver_btrfs btrfs_noversion exclude_graphdriver_devicemapper exclude_graphdriver_overlay containers_image_openpgp
     ldflags:
       - -s -w -X github.com/srl-labs/containerlab/cmd.version={{.Version}} -X github.com/srl-labs/containerlab/cmd.commit={{.ShortCommit}} -X github.com/srl-labs/containerlab/cmd.date={{.Date}}
     goos:
       - linux
     goarch:
       - amd64
-    hooks:
-      post: upx "{{ .Path }}"
+      - arm64
+    # removing upx compression due to https://github.com/srl-labs/containerlab/issues/1264
+    # hooks:
+    #   post:
+    #     - upx "{{ .Path }}"
 dockers:
   - goos: linux
     goarch: amd64
@@ -23,12 +29,12 @@ dockers:
       - '{{ $pfx := slice .Version 0 6}}{{- if eq $pfx "v0.0.0"}}ghcr.io/srl-labs/clab:beta{{else}}ghcr.io/srl-labs/clab:latest{{- end }}'
       - 'ghcr.io/srl-labs/clab:{{ replace .Version "v" ""}}'
     dockerfile: goreleaser.dockerfile
-    skip_push: false
 archives:
   - replacements:
       linux: Linux
     files:
       - lab-examples/**/*
+      - templates/**/*
 checksum:
   name_template: checksums.txt
 snapshot:
@@ -42,18 +48,14 @@ publishers:
 release:
   prerelease: auto
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
+  use: github-native
 
 nfpms:
   - id: containerlab-nfpms
     file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     package_name: containerlab
-    maintainer: Wim Henderickx <wim.henderickx@nokia.com>, Karim Radhouani <medkarimrdi@gmail.com>, Roman Dodin <dodin.roman@gmail.com>
-    homepage: https://containerlab.srlinux.dev
+    maintainer: Roman Dodin <dodin.roman@gmail.com>, Karim Radhouani <medkarimrdi@gmail.com>
+    homepage: https://containerlab.dev
     description: |
       containerlab deploys containerized networking topologies
     vendor: Nokia

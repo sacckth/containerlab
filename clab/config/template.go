@@ -1,12 +1,14 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
-
 	"text/template"
 
+	"github.com/hairyhenderson/gomplate/v3"
+	"github.com/hairyhenderson/gomplate/v3/data"
 	jT "github.com/kellerza/template"
 
 	log "github.com/sirupsen/logrus"
@@ -14,17 +16,18 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// templates to execute
+// TemplateNames is templates to execute.
 var TemplateNames []string
 
-// path to additional templates
+// TemplatePaths is path to additional templates.
 var TemplatePaths []string
 
-// debug count
+// DebugCount is a debug verbosity counter.
 var DebugCount int
 
 type NodeConfig struct {
-	TargetNode *types.NodeConfig
+	TargetNode  *types.NodeConfig
+	Credentials []string // Node's credentials
 	// All the variables used to render the template
 	Vars map[string]interface{}
 	// the Rendered templates
@@ -32,12 +35,16 @@ type NodeConfig struct {
 	Info []string
 }
 
-// Load templates from all paths for the specific role/kind
+// LoadTemplates loads templates from all paths for the specific role/kind.
 func LoadTemplates(tmpl *template.Template, role string) error {
 	for _, p := range TemplatePaths {
 		fn := filepath.Join(p, fmt.Sprintf("*__%s.tmpl", role))
 		_, err := tmpl.ParseGlob(fn)
 		if err != nil {
+			if strings.Contains(err.Error(), "pattern matches no file") {
+				log.Debug(err)
+				continue
+			}
 			return fmt.Errorf("could not load templates from %s: %w", fn, err)
 		}
 	}
@@ -45,7 +52,6 @@ func LoadTemplates(tmpl *template.Template, role string) error {
 }
 
 func RenderAll(allnodes map[string]*NodeConfig) error {
-
 	if len(TemplatePaths) == 0 { // default is the install path
 		TemplatePaths = []string{"@"}
 	}
@@ -65,7 +71,11 @@ func RenderAll(allnodes map[string]*NodeConfig) error {
 		log.Infof("No template names specified (-l) using: %s", strings.Join(TemplateNames, ", "))
 	}
 
-	tmpl := template.New("").Funcs(jT.Funcs)
+	// gomplate overrides the built-in *slice* function. You can still use *coll.Slice*
+	gfuncs := gomplate.CreateFuncs(context.Background(), new(data.Data))
+	delete(gfuncs, "slice")
+
+	tmpl := template.New("").Funcs(gfuncs).Funcs(jT.Funcs)
 
 	for _, nc := range allnodes {
 		for _, baseN := range TemplateNames {
@@ -74,13 +84,11 @@ func RenderAll(allnodes map[string]*NodeConfig) error {
 			if l := tmpl.Lookup(tmplN); l == nil {
 				err := LoadTemplates(tmpl, fmt.Sprintf("%s", nc.Vars[vkRole]))
 				if err != nil {
-					log.Warnf("Unable to load template %s; skipping", tmplN)
-					continue
+					return err
 				}
 				l = tmpl.Lookup(tmplN)
-				log.Debugf("Got a lookup result %+v (of type %T)", l, l)
 				if l == nil {
-					log.Warnf("No template found for %s; skipping..", nc.TargetNode.ShortName)
+					log.Debugf("No template found for %s; skipping..", nc.TargetNode.ShortName)
 					continue
 				}
 			}
@@ -100,14 +108,14 @@ func RenderAll(allnodes map[string]*NodeConfig) error {
 	return nil
 }
 
-// Implement stringer for NodeConfig
+// String implements stringer interface for NodeConfig.
 func (c *NodeConfig) String() string {
 	s := fmt.Sprintf("%s: %v", c.TargetNode.ShortName, c.Info)
 	return s
 }
 
-// Print the config
-func (c *NodeConfig) Print(vars, rendered bool) { //skipcq: RVV-A0005
+// Print the config.
+func (c *NodeConfig) Print(vars, rendered bool) { // skipcq: RVV-A0005
 	var s strings.Builder
 
 	s.WriteString(c.TargetNode.ShortName)

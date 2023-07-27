@@ -5,18 +5,15 @@
 package clab
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
-	"syscall"
 
-	"github.com/mitchellh/go-homedir"
+	"github.com/pmorjan/kmod"
 	log "github.com/sirupsen/logrus"
+	"github.com/srl-labs/containerlab/labels"
 	"github.com/srl-labs/containerlab/nodes"
 	clabRuntimes "github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/types"
@@ -25,86 +22,48 @@ import (
 )
 
 const (
-	// prefix is used to distinct containerlab created files/dirs/containers
+	// prefix is used to distinct containerlab created files/dirs/containers.
 	defaultPrefix = "clab"
-	// a name of a docker network that nodes management interfaces connect to
+	// a name of a docker network that nodes management interfaces connect to.
 	dockerNetName     = "clab"
 	dockerNetIPv4Addr = "172.20.20.0/24"
 	dockerNetIPv6Addr = "2001:172:20:20::/64"
-	// NSPath value assigned to host interfaces
+	// NSPath value assigned to host interfaces.
 	hostNSPath = "__host"
-	// veth link mtu
+	// veth link mtu.
 	DefaultVethLinkMTU = 9500
-	// containerlab's reserved OUI
+	// containerlab's reserved OUI.
 	ClabOUI = "aa:c1:ab"
 
-	// label names
-	ContainerlabLabel = "containerlab"
-	NodeNameLabel     = "clab-node-name"
-	NodeKindLabel     = "clab-node-kind"
-	NodeTypeLabel     = "clab-node-type"
-	NodeGroupLabel    = "clab-node-group"
-	NodeLabDirLabel   = "clab-node-lab-dir"
-	TopoFileLabel     = "clab-topo-file"
+	// clab specific topology variables.
+	clabDirVar = "__clabDir__"
+	nodeDirVar = "__clabNodeDir__"
 )
 
-// supported kinds
-var kinds = []string{
-	"srl",
-	"ceos",
-	"crpd",
-	"sonic-vs",
-	"vr-ftosv",
-	"vr-n9kv",
-	"vr-sros",
-	"vr-vmx",
-	"vr-vqfx",
-	"vr-xrv",
-	"vr-xrv9k",
-	"vr-veos",
-	"vr-pan",
-	"vr-csr",
-	"vr-ros",
-	"linux",
-	"bridge",
-	"ovs-bridge",
-	"mysocketio",
-	"host",
-	"cvx",
-}
-
-// Config defines lab configuration as it is provided in the YAML file
+// Config defines lab configuration as it is provided in the YAML file.
 type Config struct {
-	Name       string          `json:"name,omitempty"`
-	Prefix     *string         `json:"prefix,omitempty"`
-	Mgmt       *types.MgmtNet  `json:"mgmt,omitempty"`
-	Topology   *types.Topology `json:"topology,omitempty"`
-	ConfigPath string          `yaml:"config_path,omitempty"`
+	Name     string          `json:"name,omitempty"`
+	Prefix   *string         `json:"prefix,omitempty"`
+	Mgmt     *types.MgmtNet  `json:"mgmt,omitempty"`
+	Topology *types.Topology `json:"topology,omitempty"`
+	// the debug flag value as passed via cli
+	// may be used by other packages to enable debug logging
+	Debug bool `json:"debug"`
 }
 
-// ParseTopology parses the lab topology
+// ParseTopology parses the lab topology.
 func (c *CLab) parseTopology() error {
-	log.Infof("Parsing & checking topology file: %s", c.TopoFile.fullName)
-	log.Debugf("Lab name: %s", c.Config.Name)
+	log.Infof("Parsing & checking topology file: %s", c.TopoPaths.TopologyFilenameBase())
 
-	if c.Config.ConfigPath == "" {
-		c.Config.ConfigPath, _ = filepath.Abs(os.Getenv("PWD"))
+	err := c.TopoPaths.SetLabDir(c.Config.Name)
+	if err != nil {
+		return err
 	}
+
 	if c.Config.Prefix == nil {
 		c.Config.Prefix = new(string)
 		*c.Config.Prefix = defaultPrefix
 	}
-
-	c.Dir = new(Directory)
-	labDir := c.Config.Name
-	if c.Config.Prefix != nil && *c.Config.Prefix != "" {
-		labDir = strings.Join([]string{*c.Config.Prefix, c.Config.Name}, "-")
-	}
-	c.Dir.Lab = filepath.Join(c.Config.ConfigPath, labDir)
-
-	c.Dir.LabCA = filepath.Join(c.Dir.Lab, "ca")
-	c.Dir.LabCARoot = filepath.Join(c.Dir.LabCA, "root")
-	c.Dir.LabGraph = filepath.Join(c.Dir.Lab, "graph")
 
 	// initialize Nodes and Links variable
 	c.Nodes = make(map[string]nodes.Node)
@@ -118,7 +77,7 @@ func (c *CLab) parseTopology() error {
 	sort.Strings(nodeNames)
 
 	// collect node runtimes in a map[NodeName] -> RuntimeName
-	var nodeRuntimes = make(map[string]string)
+	nodeRuntimes := make(map[string]string)
 
 	for nodeName, topologyNode := range c.Config.Topology.Nodes {
 		// this case is when runtime was overridden at the node level
@@ -159,7 +118,6 @@ func (c *CLab) parseTopology() error {
 		}
 	}
 
-	var err error
 	for idx, nodeName := range nodeNames {
 		err = c.NewNode(nodeName, nodeRuntimes[nodeName], c.Config.Topology.Nodes[nodeName], idx)
 		if err != nil {
@@ -177,57 +135,59 @@ func (c *CLab) parseTopology() error {
 	return nil
 }
 
-// NewNode initializes a new node object
+// NewNode initializes a new node object.
 func (c *CLab) NewNode(nodeName, nodeRuntime string, nodeDef *types.NodeDefinition, idx int) error {
 	nodeCfg, err := c.createNodeCfg(nodeName, nodeDef, idx)
 	if err != nil {
 		return err
 	}
 
-	// Init
-	nodeInitializer, ok := nodes.Nodes[nodeCfg.Kind]
-	if !ok {
-		return fmt.Errorf("node %q refers to a kind %q which is not supported. Supported kinds are %q", nodeCfg.ShortName, nodeCfg.Kind, kinds)
+	// construct node
+	n, err := c.Reg.NewNodeOfKind(nodeCfg.Kind)
+	if err != nil {
+		return fmt.Errorf("error constructing node %q: %v", nodeCfg.ShortName, err)
 	}
-	n := nodeInitializer()
-	// Init
 
+	// Init
 	err = n.Init(nodeCfg, nodes.WithRuntime(c.Runtimes[nodeRuntime]), nodes.WithMgmtNet(c.Config.Mgmt))
 	if err != nil {
 		log.Errorf("failed to initialize node %q: %v", nodeCfg.ShortName, err)
 		return fmt.Errorf("failed to initialize node %q: %v", nodeCfg.ShortName, err)
 	}
 
-	n.Config().Labels = utils.MergeStringMaps(n.Config().Labels, map[string]string{
-		ContainerlabLabel: c.Config.Name,
-		NodeNameLabel:     n.Config().ShortName,
-		NodeKindLabel:     n.Config().Kind,
-		NodeTypeLabel:     n.Config().NodeType,
-		NodeGroupLabel:    n.Config().Group,
-		NodeLabDirLabel:   n.Config().LabDir,
-		TopoFileLabel:     c.TopoFile.path,
-	})
 	c.Nodes[nodeName] = n
+
+	c.addDefaultLabels(n)
+
+	labelsToEnvVars(n.Config())
 
 	return nil
 }
 
 func (c *CLab) createNodeCfg(nodeName string, nodeDef *types.NodeDefinition, idx int) (*types.NodeConfig, error) {
-	longName := strings.Join([]string{c.Config.Name, nodeName}, "-")
-	if c.Config.Prefix != nil && *c.Config.Prefix != "" {
-		longName = strings.Join([]string{*c.Config.Prefix, longName}, "-")
+	// default longName follows $prefix-$lab-$nodeName pattern
+	longName := fmt.Sprintf("%s-%s-%s", *c.Config.Prefix, c.Config.Name, nodeName)
+
+	switch {
+	// when prefix is an empty string longName will match shortName/nodeName
+	case *c.Config.Prefix == "":
+		longName = nodeName
+	case *c.Config.Prefix == "__lab-name":
+		longName = fmt.Sprintf("%s-%s", c.Config.Name, nodeName)
 	}
+
 	nodeCfg := &types.NodeConfig{
-		ShortName:       nodeName,
-		LongName:        longName,
-		Fqdn:            strings.Join([]string{nodeName, c.Config.Name, ".io"}, "."),
-		LabDir:          filepath.Join(c.Dir.Lab, nodeName),
+		ShortName:       nodeName, // just the node name as seen in the topo file
+		LongName:        longName, // by default clab-$labName-$nodeName
+		Fqdn:            strings.Join([]string{nodeName, c.Config.Name, "io"}, "."),
+		LabDir:          c.TopoPaths.NodeDir(nodeName),
 		Index:           idx,
 		Group:           c.Config.Topology.GetNodeGroup(nodeName),
 		Kind:            strings.ToLower(c.Config.Topology.GetNodeKind(nodeName)),
 		NodeType:        c.Config.Topology.GetNodeType(nodeName),
 		Position:        c.Config.Topology.GetNodePosition(nodeName),
 		Image:           c.Config.Topology.GetNodeImage(nodeName),
+		ImagePullPolicy: c.Config.Topology.GetNodeImagePullPolicy(nodeName),
 		User:            c.Config.Topology.GetNodeUser(nodeName),
 		Entrypoint:      c.Config.Topology.GetNodeEntrypoint(nodeName),
 		Cmd:             c.Config.Topology.GetNodeCmd(nodeName),
@@ -237,8 +197,8 @@ func (c *CLab) createNodeCfg(nodeName string, nodeDef *types.NodeDefinition, idx
 		MgmtIPv4Address: nodeDef.GetMgmtIPv4(),
 		MgmtIPv6Address: nodeDef.GetMgmtIPv6(),
 		Publish:         c.Config.Topology.GetNodePublish(nodeName),
-		Sysctls:         make(map[string]string),
-		Endpoints:       make([]*types.Endpoint, 0),
+		Sysctls:         c.Config.Topology.GetSysCtl(nodeName),
+		Endpoints:       make([]types.Endpoint, 0),
 		Sandbox:         c.Config.Topology.GetNodeSandbox(nodeName),
 		Kernel:          c.Config.Topology.GetNodeKernel(nodeName),
 		Runtime:         c.Config.Topology.GetNodeRuntime(nodeName),
@@ -246,15 +206,29 @@ func (c *CLab) createNodeCfg(nodeName string, nodeDef *types.NodeDefinition, idx
 		CPUSet:          c.Config.Topology.GetNodeCPUSet(nodeName),
 		Memory:          c.Config.Topology.GetNodeMemory(nodeName),
 		StartupDelay:    c.Config.Topology.GetNodeStartupDelay(nodeName),
-
-		// Extras
-		Extras: c.Config.Topology.GetNodeExtras(nodeName),
+		AutoRemove:      c.Config.Topology.GetNodeAutoRemove(nodeName),
+		SANs:            c.Config.Topology.GetSANs(nodeName),
+		Extras:          c.Config.Topology.GetNodeExtras(nodeName),
+		WaitFor:         c.Config.Topology.GetWaitFor(nodeName),
+		DNS:             c.Config.Topology.GetNodeDns(nodeName),
+		Certificate:     c.Config.Topology.GetCertificateConfig(nodeName),
 	}
 
-	log.Debugf("node config: %+v", nodeCfg)
 	var err error
-	// initialize config
-	nodeCfg.StartupConfig, err = c.Config.Topology.GetNodeStartupConfig(nodeCfg.ShortName)
+
+	// Load content of the EnvVarFiles
+	envFileContent, err := utils.LoadEnvVarFiles(c.TopoPaths.TopologyFileDir(),
+		c.Config.Topology.GetNodeEnvFiles(nodeName))
+	if err != nil {
+		return nil, err
+	}
+	// Merge EnvVarFiles content and the existing env variable
+	nodeCfg.Env = utils.MergeStringMaps(envFileContent, nodeCfg.Env)
+
+	log.Debugf("node config: %+v", nodeCfg)
+
+	// process startup-config
+	err = c.processStartupConfig(nodeCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -262,13 +236,19 @@ func (c *CLab) createNodeCfg(nodeName string, nodeDef *types.NodeDefinition, idx
 	nodeCfg.EnforceStartupConfig = c.Config.Topology.GetNodeEnforceStartupConfig(nodeCfg.ShortName)
 
 	// initialize license field
-	nodeCfg.License, err = c.Config.Topology.GetNodeLicense(nodeCfg.ShortName)
+	p, err := c.Config.Topology.GetNodeLicense(nodeCfg.ShortName)
 	if err != nil {
 		return nil, err
 	}
+	// resolve the lic path to an abs path
+	nodeCfg.License = utils.ResolvePath(p, c.TopoPaths.TopologyFileDir())
+
 	// initialize bind mounts
-	binds := c.Config.Topology.GetNodeBinds(nodeName)
-	err = resolveBindPaths(binds, nodeCfg.LabDir)
+	binds, err := c.Config.Topology.GetNodeBinds(nodeName)
+	if err != nil {
+		return nil, err
+	}
+	err = c.resolveBindPaths(binds, nodeCfg.LabDir)
 	if err != nil {
 		return nil, err
 	}
@@ -277,6 +257,7 @@ func (c *CLab) createNodeCfg(nodeName string, nodeDef *types.NodeDefinition, idx
 	if err != nil {
 		return nil, err
 	}
+
 	nodeCfg.Labels = c.Config.Topology.GetNodeLabels(nodeCfg.ShortName)
 
 	nodeCfg.Config = c.Config.Topology.GetNodeConfigDispatcher(nodeCfg.ShortName)
@@ -284,22 +265,89 @@ func (c *CLab) createNodeCfg(nodeName string, nodeDef *types.NodeDefinition, idx
 	return nodeCfg, nil
 }
 
-// NewLink initializes a new link object
-func (c *CLab) NewLink(l *types.LinkConfig) *types.Link {
+// processStartupConfig processes the raw path of the startup-config as it is defined in the topology file.
+// It handles remote files, local files and embedded configs.
+// Returns an absolute path to the startup-config file.
+func (c *CLab) processStartupConfig(nodeCfg *types.NodeConfig) error {
+	// process startup-config
+	p, err := c.Config.Topology.GetNodeStartupConfig(nodeCfg.ShortName)
+	if err != nil {
+		return err
+	}
+
+	// embedded config is a config that is defined as a multi-line string in the topology file
+	// it contains at least one newline
+	isEmbeddedConfig := strings.Count(p, "\n") >= 1
+	// downloadable config starts with http(s)://
+	isDownloadableConfig := utils.IsHttpUri(p)
+
+	if isEmbeddedConfig || isDownloadableConfig {
+		// both embedded and downloadable configs are require clab tmp dir to be created
+		tmpLoc := c.TopoPaths.ClabTmpDir()
+		utils.CreateDirectory(tmpLoc, 0755)
+
+		switch {
+		case isEmbeddedConfig:
+			log.Debugf("Node %q startup-config is an embedded config: %q", nodeCfg.ShortName, p)
+			// for embedded config we create a file with the name embedded.partial.cfg
+			// as embedded configs are meant to be partial configs
+			absDestFile := c.TopoPaths.StartupConfigDownloadFileAbsPath(
+				nodeCfg.ShortName, "embedded.partial.cfg")
+
+			err = utils.CreateFile(absDestFile, p)
+			if err != nil {
+				return err
+			}
+
+			p = absDestFile
+
+		case isDownloadableConfig:
+			log.Debugf("Node %q startup-config is a downloadable config %q", nodeCfg.ShortName, p)
+			// get file name from an URL
+			fname := utils.FilenameForURL(p)
+
+			// Deduce the absolute destination filename for the downloaded content
+			absDestFile := c.TopoPaths.StartupConfigDownloadFileAbsPath(nodeCfg.ShortName, fname)
+
+			log.Debugf("Fetching startup-config %q for node %q storing at %q", p, nodeCfg.ShortName, absDestFile)
+			// download the file to tmp location
+			err := utils.CopyFileContents(p, absDestFile, 0755)
+			if err != nil {
+				return err
+			}
+
+			// adjust the nodeconfig by pointing startup-config to the local downloaded file
+			p = absDestFile
+		}
+	}
+	// resolve the startup config path to an abs path
+	nodeCfg.StartupConfig = utils.ResolvePath(p, c.TopoPaths.TopologyFileDir())
+
+	return nil
+}
+
+// NewLink initializes a new link object from the link definition provided via topology file.
+func (c *CLab) NewLink(l *types.LinkDefinition) *types.Link {
 	if len(l.Endpoints) != 2 {
 		log.Fatalf("endpoint %q has wrong syntax, unexpected number of items", l.Endpoints) // skipcq: RVV-A0003
+	}
+
+	mtu := l.MTU
+
+	if mtu == 0 {
+		mtu = DefaultVethLinkMTU
 	}
 
 	return &types.Link{
 		A:      c.NewEndpoint(l.Endpoints[0]),
 		B:      c.NewEndpoint(l.Endpoints[1]),
-		MTU:    DefaultVethLinkMTU,
+		MTU:    mtu,
 		Labels: l.Labels,
 		Vars:   l.Vars,
 	}
 }
 
-// NewEndpoint initializes a new endpoint object
+// NewEndpoint initializes a new endpoint object.
 func (c *CLab) NewEndpoint(e string) *types.Endpoint {
 	// initialize a new endpoint
 	endpoint := new(types.Endpoint)
@@ -314,7 +362,8 @@ func (c *CLab) NewEndpoint(e string) *types.Endpoint {
 	// initialize the endpoint name based on the split function
 	endpoint.EndpointName = split[1] // endpoint name
 	if len(endpoint.EndpointName) > 15 {
-		log.Fatalf("interface '%s' name exceeds maximum length of 15 characters", endpoint.EndpointName) //skipcq: RVV-A0003
+		log.Fatalf("interface '%s' name exceeds maximum length of 15 characters",
+			endpoint.EndpointName) // skipcq: RVV-A0003
 	}
 	// generate unique MAC
 	endpoint.MAC = utils.GenMac(ClabOUI)
@@ -325,24 +374,28 @@ func (c *CLab) NewEndpoint(e string) *types.Endpoint {
 	// for which we create an special Node with kind "host"
 	case "host":
 		endpoint.Node = &types.NodeConfig{
-			Kind:             "host",
-			ShortName:        "host",
-			NSPath:           hostNSPath,
-			DeploymentStatus: "created",
+			Kind:      "host",
+			ShortName: "host",
+			NSPath:    hostNSPath,
+		}
+	case "macvlan":
+		endpoint.Node = &types.NodeConfig{
+			Kind:      "macvlan",
+			ShortName: "macvlan",
+			NSPath:    hostNSPath,
 		}
 	// mgmt-net is a special reference to a bridge of the docker network
 	// that is used as the management network
 	case "mgmt-net":
 		endpoint.Node = &types.NodeConfig{
-			Kind:             "bridge",
-			ShortName:        "mgmt-net",
-			DeploymentStatus: "created",
+			Kind:      "bridge",
+			ShortName: "mgmt-net",
 		}
 	default:
 		c.m.Lock()
 		if n, ok := c.Nodes[nName]; ok {
 			endpoint.Node = n.Config()
-			n.Config().Endpoints = append(n.Config().Endpoints, endpoint)
+			n.Config().Endpoints = append(n.Config().Endpoints, *endpoint)
 		}
 		c.m.Unlock()
 	}
@@ -356,13 +409,21 @@ func (c *CLab) NewEndpoint(e string) *types.Endpoint {
 	return endpoint
 }
 
-// CheckTopologyDefinition runs topology checks and returns any errors found
+// CheckTopologyDefinition runs topology checks and returns any errors found.
+// This function runs after topology file is parsed and all nodes/links are initialized.
 func (c *CLab) CheckTopologyDefinition(ctx context.Context) error {
 	var err error
-	if err = c.verifyBridgesExist(); err != nil {
-		return err
+
+	for _, node := range c.Nodes {
+		err := node.CheckDeploymentConditions(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	if err = c.verifyLinks(); err != nil {
+		return err
+	}
+	if err = c.verifyDuplicateAddresses(); err != nil {
 		return err
 	}
 	if err = c.verifyRootNetnsInterfaceUniqueness(); err != nil {
@@ -371,76 +432,103 @@ func (c *CLab) CheckTopologyDefinition(ctx context.Context) error {
 	if err = c.VerifyContainersUniqueness(ctx); err != nil {
 		return err
 	}
-	if err = c.verifyVirtSupport(); err != nil {
-		return err
-	}
 	if err = c.verifyHostIfaces(); err != nil {
 		return err
-	}
-	return c.VerifyImages(ctx)
-}
-
-// VerifyBridgeExists verifies if every node of kind=bridge/ovs-bridge exists on the lab host
-func (c *CLab) verifyBridgesExist() error {
-	for name, node := range c.Nodes {
-		if node.Config().Kind == nodes.NodeKindBridge || node.Config().Kind == nodes.NodeKindOVS {
-			if _, err := netlink.LinkByName(name); err != nil {
-				return fmt.Errorf("bridge %s is referenced in the endpoints section but was not found in the default network namespace", name)
-			}
-		}
 	}
 	return nil
 }
 
+// verifyLinks checks if all the endpoints in the links section of the topology file
+// appear only once.
 func (c *CLab) verifyLinks() error {
 	endpoints := map[string]struct{}{}
 	// dups accumulates duplicate links
 	dups := []string{}
-	for _, lc := range c.Config.Topology.Links {
-		for _, e := range lc.Endpoints {
-			if err := checkEndpoint(e); err != nil {
-				return err
+	for _, l := range c.Links {
+		for _, e := range []*types.Endpoint{l.A, l.B} {
+			e_string := e.String()
+			if _, ok := endpoints[e_string]; ok {
+				// macvlan interface can appear multiple times
+				if strings.Contains(e_string, "macvlan") {
+					continue
+				}
+
+				dups = append(dups, e_string)
 			}
-			if _, ok := endpoints[e]; ok {
-				dups = append(dups, e)
-			}
-			endpoints[e] = struct{}{}
+			endpoints[e_string] = struct{}{}
 		}
 	}
 	if len(dups) != 0 {
+		sort.Strings(dups) // sort for deterministic error message
 		return fmt.Errorf("endpoints %q appeared more than once in the links section of the topology file", dups)
 	}
 	return nil
 }
 
-// VerifyImages will check if image referred in the node config
-// either pullable or is available in the local image store
-func (c *CLab) VerifyImages(ctx context.Context) error {
+// LoadKernelModules loads containerlab-required kernel modules.
+func (c *CLab) LoadKernelModules() error {
+	modules := []string{"ip_tables", "ip6_tables"}
 
-	images := make(map[string]string)
-
-	for _, node := range c.Nodes {
-
-		for _, imageName := range node.GetImages() {
-			if imageName == "" {
-				return fmt.Errorf("missing required image for node %q", node.Config().ShortName)
-			}
-			images[imageName] = node.GetRuntime().GetName()
-		}
-
-	}
-
-	for image, runtimeName := range images {
-		err := c.Runtimes[runtimeName].PullImageIfRequired(ctx, image)
+	for _, m := range modules {
+		isLoaded, err := utils.IsKernelModuleLoaded(m)
 		if err != nil {
 			return err
 		}
+
+		if isLoaded {
+			log.Debugf("kernel module %q is already loaded", m)
+
+			continue
+		}
+
+		log.Debugf("kernel module %q is not loaded. Trying to load", m)
+		// trying to load the kernel modules.
+		km, err := kmod.New()
+		if err != nil {
+			log.Warnf("Unable to init module loader: %v. Skipping...", err)
+
+			return nil
+		}
+
+		err = km.Load(m, "", 0)
+		if err != nil {
+			log.Warnf("Unable to load kernel module %q automatically %q", m, err)
+
+			return nil
+		}
+
+		log.Debugf("kernel module %q loaded successfully", m)
 	}
+
+	return nil
+}
+
+// verifyDuplicateAddresses checks that every static IP address in the topology is unique.
+func (c *CLab) verifyDuplicateAddresses() error {
+	dupIps := map[string]struct{}{}
+	for _, node := range c.Nodes {
+		ips := []string{node.Config().MgmtIPv4Address, node.Config().MgmtIPv6Address}
+		if ips[0] == "" && ips[1] == "" {
+			continue
+		}
+
+		for _, ip := range ips {
+			if _, exists := dupIps[ip]; !exists {
+				if ip == "" {
+					continue
+				}
+				dupIps[ip] = struct{}{}
+			} else {
+				return fmt.Errorf("management IP address %s appeared more than once in the topology file", ip)
+			}
+		}
+	}
+
 	return nil
 }
 
 // VerifyContainersUniqueness ensures that nodes defined in the topology do not have names of the existing containers
-// additionally it checks that the lab name is unique and no containers are currently running with the same lab name label
+// additionally it checks that the lab name is unique and no containers are currently running with the same lab name label.
 func (c *CLab) VerifyContainersUniqueness(ctx context.Context) error {
 	nctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -457,7 +545,7 @@ func (c *CLab) VerifyContainersUniqueness(ctx context.Context) error {
 	dups := []string{}
 	for _, n := range c.Nodes {
 		for _, cnt := range containers {
-			if "/"+n.Config().LongName == cnt.Names[0] {
+			if n.Config().LongName == cnt.Names[0] {
 				dups = append(dups, n.Config().LongName)
 			}
 		}
@@ -470,7 +558,7 @@ func (c *CLab) VerifyContainersUniqueness(ctx context.Context) error {
 	// the lab name of a currently deploying lab
 	// this ensures lab uniqueness
 	for _, cnt := range containers {
-		if cnt.Labels[ContainerlabLabel] == c.Config.Name {
+		if cnt.Labels[labels.Containerlab] == c.Config.Name {
 			return fmt.Errorf("the '%s' lab has already been deployed. Destroy the lab before deploying a lab with the same name", c.Config.Name)
 		}
 	}
@@ -480,39 +568,32 @@ func (c *CLab) VerifyContainersUniqueness(ctx context.Context) error {
 
 // verifyHostIfaces ensures that host interfaces referenced in the topology
 // do not exist already in the root namespace
-// and ensure that nodes that are configured with host networking mode do not have any interfaces defined
+// and ensure that nodes that are configured with host networking mode do not have any interfaces defined.
 func (c *CLab) verifyHostIfaces() error {
 	for _, l := range c.Links {
-		if l.A.Node.ShortName == "host" {
-			if nl, _ := netlink.LinkByName(l.A.EndpointName); nl != nil {
-				return fmt.Errorf("host interface %s referenced in topology already exists", l.A.EndpointName)
+		for _, ep := range []*types.Endpoint{l.A, l.B} {
+			if ep.Node.ShortName == "host" {
+				if nl, _ := netlink.LinkByName(ep.EndpointName); nl != nil {
+					return fmt.Errorf("host interface %s referenced in topology already exists", ep.EndpointName)
+				}
 			}
-		}
-		if l.A.Node.NetworkMode == "host" {
-			return fmt.Errorf("node '%s' is defined with host network mode, it can't have any links. Remove '%s' node links from the topology definition",
-				l.A.Node.ShortName, l.A.Node.ShortName)
-		}
-		if l.B.Node.ShortName == "host" {
-			if nl, _ := netlink.LinkByName(l.B.EndpointName); nl != nil {
-				return fmt.Errorf("host interface %s referenced in topology already exists", l.B.EndpointName)
+			if ep.Node.NetworkMode == "host" {
+				return fmt.Errorf("node '%s' is defined with host network mode, it can't have any links. Remove '%s' node links from the topology definition",
+					ep.Node.ShortName, ep.Node.ShortName)
 			}
-		}
-		if l.B.Node.NetworkMode == "host" {
-			return fmt.Errorf("node '%s' is defined with host network mode, it can't have any links. Remove '%s' node links from the topology definition",
-				l.B.Node.ShortName, l.B.Node.ShortName)
 		}
 	}
 	return nil
 }
 
 // verifyRootNetnsInterfaceUniqueness ensures that interafaces that appear in the root ns (bridge, ovs-bridge and host)
-// are uniquely defined in the topology file
+// are uniquely defined in the topology file.
 func (c *CLab) verifyRootNetnsInterfaceUniqueness() error {
 	rootNsIfaces := map[string]struct{}{}
 	for _, l := range c.Links {
 		endpoints := [2]*types.Endpoint{l.A, l.B}
 		for _, e := range endpoints {
-			if e.Node.Kind == nodes.NodeKindBridge || e.Node.Kind == nodes.NodeKindOVS || e.Node.Kind == nodes.NodeKindHOST {
+			if e.Node.IsRootNamespaceBased {
 				if _, ok := rootNsIfaces[e.EndpointName]; ok {
 					return fmt.Errorf(`interface %s defined for node %s has already been used in other bridges, ovs-bridges or host interfaces.
 					Make sure that nodes of these kinds use unique interface names`, e.EndpointName, e.Node.ShortName)
@@ -524,126 +605,40 @@ func (c *CLab) verifyRootNetnsInterfaceUniqueness() error {
 	return nil
 }
 
-// verifyVirtSupport checks if virtualization supported by vcpu if vrnetlab nodes are used
-func (c *CLab) verifyVirtSupport() error {
-	virtNeeded := false
-	for _, n := range c.Nodes {
-		if strings.HasPrefix(n.Config().Kind, "vr-") {
-			virtNeeded = true
-			break
-		}
-	}
-	if !virtNeeded {
-		return nil
-	}
-	f, err := os.Open("/proc/cpuinfo")
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-
-	for scanner.Scan() {
-		if strings.Contains(scanner.Text(), "vmx") || strings.Contains(scanner.Text(), "svm") {
-			return nil
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-
-	return fmt.Errorf("virtualization seems to be not supported and it is required for VM based nodes. Check if virtualization can be enabled")
-}
-
-// checkEndpoint runs checks on the endpoint syntax
-func checkEndpoint(e string) error {
-	split := strings.Split(e, ":")
-	if len(split) != 2 {
-		return fmt.Errorf("malformed endpoint definition: %s", e)
-	}
-	if split[1] == "eth0" {
-		return fmt.Errorf("eth0 interface can't be used in the endpoint definition as it is added by docker automatically: '%s'", e)
-	}
-	return nil
-}
-
-//resolvePath resolves a string path by expanding `~` to home dir or getting Abs path for the given path
-func resolvePath(p string) (string, error) {
-	if p == "" {
-		return "", nil
-	}
-	var err error
-	switch {
-	// resolve ~/ path
-	case p[0] == '~':
-		p, err = homedir.Expand(p)
-		if err != nil {
-			return "", err
-		}
-	default:
-		p, err = filepath.Abs(p)
-		if err != nil {
-			return "", err
-		}
-	}
-	return p, nil
-}
-
 // resolveBindPaths resolves the host paths in a bind string, such as /hostpath:/remotepath(:options) string
-// it allows host path to have `~` and returns absolute path for a relative path
-// if the host path doesn't exist, the error will be returned
-func resolveBindPaths(binds []string, nodedir string) error {
+// it allows host path to have `~` and relative path to an absolute path
+// the list of binds will be changed in place.
+// if the host path doesn't exist, the error will be returned.
+func (c *CLab) resolveBindPaths(binds []string, nodedir string) error {
 	for i := range binds {
 		// host path is a first element in a /hostpath:/remotepath(:options) string
 		elems := strings.Split(binds[i], ":")
 
-		r := strings.NewReplacer("$nodeDir", nodedir)
+		// replace special variable
+		r := strings.NewReplacer(clabDirVar, c.TopoPaths.TopologyLabDir(), nodeDirVar, nodedir)
 		hp := r.Replace(elems[0])
+		hp = utils.ResolvePath(hp, c.TopoPaths.TopologyFileDir())
 
-		hp, err := resolvePath(hp)
+		_, err := os.Stat(hp)
 		if err != nil {
-			return err
-		}
-
-		_, err = os.Stat(hp)
-		if err != nil {
-			// check if the hostpath mount has a reference to ansible-inventory.yml
-			// if that is the case, we do not emit an error on missing file, since this file
+			// check if the hostpath mount has a reference to ansible-inventory.yml or topology-data.json
+			// if that is the case, we do not emit an error on missing file, since these files
 			// will be created by containerlab upon lab deployment
-			labdir := filepath.Base(filepath.Dir(nodedir))
-			s := strings.Split(hp, string(os.PathSeparator))
-			// creating a path from last two elements of a resolved host path
-			h := filepath.Join(s[len(s)-2], s[len(s)-1])
-			if h != filepath.Join(labdir, "ansible-inventory.yml") {
+			if hp != c.TopoPaths.AnsibleInventoryFileAbsPath() &&
+				hp != c.TopoPaths.TopoExportFile() {
 				return fmt.Errorf("failed to verify bind path: %v", err)
 			}
 		}
 		elems[0] = hp
 		binds[i] = strings.Join(elems, ":")
 	}
+
 	return nil
 }
 
-// CheckResources runs container host resources check
-func (*CLab) CheckResources() error {
-	vcpu := runtime.NumCPU()
-	log.Debugf("Number of vcpu: %d", vcpu)
-	if vcpu < 2 {
-		log.Warn("Only 1 vcpu detected on this container host. Most containerlab nodes require at least 2 vcpu")
-	}
-	freeMemG := sysMemory("free") / 1024 / 1024 / 1024
-	if freeMemG < 1 {
-		log.Warnf("it appears that container host has low memory available: ~%dGi. This might lead to runtime errors. Consider freeing up more memory.", freeMemG)
-	}
-	return nil
-}
-
-// sets defaults after the topology has been parsed
+// sets defaults after the topology has been parsed.
 func (c *CLab) setDefaults() {
 	for _, n := range c.Nodes {
-
 		// Injecting the env var with expected number of links
 		numLinks := map[string]string{
 			types.CLAB_ENV_INTFS: fmt.Sprintf("%d", len(n.Config().Endpoints)),
@@ -653,32 +648,56 @@ func (c *CLab) setDefaults() {
 	}
 }
 
-// sysMemory reports on total installed or free memory (in bytes)
-// used from https://github.com/pbnjay/memory
-func sysMemory(v string) uint64 {
-	in := &syscall.Sysinfo_t{}
-	err := syscall.Sysinfo(in)
-	if err != nil {
-		return 0
+// returns nodeCfg.ShortName based on the provided containerName and labName.
+func getShortName(labName string, labPrefix *string, containerName string) (string, error) {
+	if *labPrefix == "" {
+		return containerName, nil
 	}
-	var m uint64
-	// If this is a 32-bit system, then these fields are
-	// uint32 instead of uint64.
-	// So we always convert to uint64 to match signature.
-	switch v {
-	case "total":
-		m = uint64(in.Totalram) * uint64(in.Unit)
-	case "free":
-		m = uint64(in.Freeram) * uint64(in.Unit)
-	}
-	return m
-}
 
-// returns nodeCfg.ShortName based on the provided containerName and labName
-func getShortName(labName, containerName string) (string, error) {
 	result := strings.Split(containerName, "-"+labName+"-")
 	if len(result) != 2 {
 		return "", fmt.Errorf("failed to parse container name %q", containerName)
 	}
 	return result[1], nil
+}
+
+// HasKind returns true if kind k is found in the list of nodes.
+func (c *CLab) HasKind(k string) bool {
+	for _, n := range c.Nodes {
+		if n.Config().Kind == k {
+			log.Warn("found")
+			return true
+		}
+	}
+
+	return false
+}
+
+// addDefaultLabels adds default labels to node's config struct.
+func (c *CLab) addDefaultLabels(n nodes.Node) {
+	cfg := n.Config()
+	if cfg.Labels == nil {
+		cfg.Labels = map[string]string{}
+	}
+
+	cfg.Labels[labels.Containerlab] = c.Config.Name
+	cfg.Labels[labels.NodeName] = cfg.ShortName
+	cfg.Labels[labels.NodeKind] = cfg.Kind
+	cfg.Labels[labels.NodeType] = cfg.NodeType
+	cfg.Labels[labels.NodeGroup] = cfg.Group
+	cfg.Labels[labels.NodeLabDir] = cfg.LabDir
+	cfg.Labels[labels.TopoFile] = c.TopoPaths.TopologyFilenameAbsPath()
+}
+
+// labelsToEnvVars adds labels to env vars with CLAB_LABEL_ prefix added
+// and labels value sanitized.
+func labelsToEnvVars(n *types.NodeConfig) {
+	if n.Env == nil {
+		n.Env = map[string]string{}
+	}
+
+	for k, v := range n.Labels {
+		// add the value to the node env with a prefixed and special chars cleaned up key
+		n.Env["CLAB_LABEL_"+utils.ToEnvKey(k)] = v
+	}
 }

@@ -5,10 +5,13 @@
 package utils
 
 import (
+	"bufio"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"mime"
 	"net/http"
 	"net/url"
@@ -16,9 +19,13 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/steiler/acls"
+
+	"github.com/charmbracelet/log"
 )
 
 var (
@@ -35,12 +42,26 @@ func FileExists(filename string) bool {
 	return !f.IsDir()
 }
 
+// FileOrDirExists returns true if a file or dir referenced by path exists & accessible.
+func FileOrDirExists(filename string) bool {
+	f, err := os.Stat(filename)
+
+	return err == nil && f != nil
+}
+
+// DirExists returns true if a dir referenced by path exists & accessible.
+func DirExists(filename string) bool {
+	f, err := os.Stat(filename)
+
+	return err == nil && f != nil && f.IsDir()
+}
+
 // CopyFile copies a file from src to dst. If src and dst files exist, and are
 // the same, then return success. Otherwise, copy the file contents from src to dst.
 // mode is the desired target file permissions, e.g. "0644".
 func CopyFile(src, dst string, mode os.FileMode) (err error) {
 	var sfi os.FileInfo
-	if !IsHttpUri(src) {
+	if !IsHttpURL(src, false) {
 		sfi, err = os.Stat(src)
 		if err != nil {
 			return err
@@ -72,9 +93,40 @@ func CopyFile(src, dst string, mode os.FileMode) (err error) {
 	return CopyFileContents(src, dst, mode)
 }
 
-// IsHttpUri check if the url is a downloadable uri.
-func IsHttpUri(s string) bool {
-	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+// IsHttpURL checks if the url is a downloadable HTTP URL.
+// The allowSchemaless toggle when set to true will allow URLs without a schema
+// such as "srlinux.dev/clab-srl". This is shortened notion that is used with
+// "deploy -t <url>" only.
+// Other callers of IsHttpURL should set the toggle to false.
+func IsHttpURL(s string, allowSchemaless bool) bool {
+	// '-' denotes stdin and not the URL
+	if s == "-" {
+		return false
+	}
+
+	// if schemaless is not allowed and the string does not contain a schema, it is not an URL
+	if !allowSchemaless && !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+		return false
+	}
+
+	// if schemaless is allowed and the string does not contain a schema, but contains a dot
+	// in any a non-domain portion then it is not a valid URL
+	if allowSchemaless && !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+		split := strings.SplitN(s, "/", 2)
+		if len(split) > 1 {
+			if strings.Contains(split[1], ".") {
+				return false
+			}
+		}
+	}
+
+	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+		s = "https://" + s
+	}
+
+	u, err := url.ParseRequestURI(s)
+
+	return err == nil && u.Host != ""
 }
 
 // CopyFileContents copies the contents of the file named src to the file named
@@ -85,8 +137,11 @@ func IsHttpUri(s string) bool {
 func CopyFileContents(src, dst string, mode os.FileMode) (err error) {
 	var in io.ReadCloser
 
-	if IsHttpUri(src) {
-		resp, err := http.Get(src)
+	if IsHttpURL(src, false) {
+		client := NewHTTPClient()
+
+		// download using client
+		resp, err := client.Get(src)
 		if err != nil || resp.StatusCode != 200 {
 			return fmt.Errorf("%w: %s", errHTTPFetch, src)
 		}
@@ -108,6 +163,12 @@ func CopyFileContents(src, dst string, mode os.FileMode) (err error) {
 	}
 
 	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+
+	// Change file ownership to user running Containerlab instead of effective UID
+	err = SetUIDAndGID(dst)
 	if err != nil {
 		return err
 	}
@@ -148,6 +209,12 @@ func CreateFile(file, content string) (err error) {
 	}
 
 	_, err = f.WriteString(content)
+	if err != nil {
+		return err
+	}
+
+	// Change file ownership to user running Containerlab instead of effective UID
+	err = SetUIDAndGID(file)
 	if err != nil {
 		return err
 	}
@@ -231,6 +298,8 @@ func lookupUserHomeDirViaGetent(userId string) string {
 
 // ResolvePath resolves a string path by expanding `~` to home dir
 // or resolving a relative path by joining it with the base path.
+// When resolving `~` the function uses the home dir of a sudo user, so that -E sudo
+// flag can be omitted.
 func ResolvePath(p, base string) string {
 	if p == "" {
 		return p
@@ -262,7 +331,7 @@ func FilenameForURL(rawUrl string) string {
 	}
 
 	// try extracting the filename from "content-disposition" header
-	if IsHttpUri(rawUrl) {
+	if IsHttpURL(rawUrl, false) {
 		resp, err := http.Head(rawUrl)
 		if err != nil {
 			return filepath.Base(u.Path)
@@ -274,4 +343,185 @@ func FilenameForURL(rawUrl string) string {
 		}
 	}
 	return filepath.Base(u.Path)
+}
+
+// FileLines opens a file by the `path` and returns a slice of strings for each line
+// excluding lines that start with `commentStr` or are empty.
+func FileLines(path, commentStr string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file %v: %w", path, err)
+	}
+	defer f.Close() // skipcq: GO-S2307
+
+	var lines []string
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Skip lines that start with comment char
+		if strings.HasPrefix(line, commentStr) || line == "" {
+			continue
+		}
+
+		lines = append(lines, line)
+	}
+
+	return lines, nil
+}
+
+// NewHTTPClient creates a new HTTP client with
+// insecure skip verify set to true and min TLS version set to 1.2.
+func NewHTTPClient() *http.Client {
+	// set InsecureSkipVerify to true to allow fetching
+	// files form servers with self-signed certificates
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, // skipcq: GSC-G402
+			MinVersion:         tls.VersionTLS12,
+		},
+	}
+
+	return &http.Client{Transport: tr}
+}
+
+func getRealUserIDs() (int, int, error) {
+	// Here we check whether SUDO set the SUDO_UID and SUDO_GID variables
+	var userUID, userGID int
+	var err error
+
+	sudoUID, isSudoUIDSet := os.LookupEnv("SUDO_UID")
+	if isSudoUIDSet {
+		userUID, err = strconv.Atoi(sudoUID)
+		if err != nil {
+			return -1, -1, fmt.Errorf("unable to convert SUDO_UID %q to int", sudoUID)
+		}
+		sudoGID, isSudoGIDSet := os.LookupEnv("SUDO_GID")
+		if isSudoGIDSet {
+			userGID, err = strconv.Atoi(sudoGID)
+			if err != nil {
+				return -1, -1, fmt.Errorf("unable to convert SUDO_GID %q to int", sudoGID)
+			}
+		}
+		// Otherwise just check for the real UID/GID (instead of the effective UID)
+	} else {
+		userUID = os.Getuid()
+		userGID = os.Getgid()
+	}
+
+	return userUID, userGID, nil
+}
+
+// AdjustFileACLs takes the given fs path, tries to load the access file acl of that path and adds ACL rules:
+// rwx for the real UID user and r-x for the real GID group.
+func AdjustFileACLs(fsPath string) error {
+	userUID, userGID, err := getRealUserIDs()
+	if err != nil {
+		return fmt.Errorf("unable to retrieve real user UID and GID: %v", err)
+	}
+
+	if userUID == 0 && userGID == 0 {
+		// We are running as root without sudo, return early
+		return nil
+	}
+
+	// create a new ACL instance
+	a := &acls.ACL{}
+	// load the existing ACL entries of the PosixACLAccess type
+	err = a.Load(fsPath, acls.PosixACLAccess)
+	if err != nil {
+		return err
+	}
+
+	// add an entry for the group
+	err = a.AddEntry(acls.NewEntry(acls.TAG_ACL_GROUP, uint32(userGID), 5))
+	if err != nil {
+		return err
+	}
+
+	// add an entry for the User
+	err = a.AddEntry(acls.NewEntry(acls.TAG_ACL_USER, uint32(userUID), 7))
+	if err != nil {
+		return err
+	}
+
+	// set the mask entry
+	err = a.AddEntry(acls.NewEntry(acls.TAG_ACL_MASK, math.MaxUint32, 7))
+	if err != nil {
+		return err
+	}
+
+	// apply the ACL and return the error result
+	err = a.Apply(fsPath, acls.PosixACLAccess)
+	if err != nil {
+		return err
+	}
+
+	return a.Apply(fsPath, acls.PosixACLDefault)
+}
+
+// SetUIDAndGID changes the UID and GID of the given path recursively to the values taken from getRealUserIDs,
+// which should reflect the non-root user's UID and GID.
+func SetUIDAndGID(fsPath string) error {
+	userUID, userGID, err := getRealUserIDs()
+	if err != nil {
+		return fmt.Errorf("unable to retrieve real user UID and GID: %v", err)
+	}
+
+	if userUID == 0 && userGID == 0 {
+		// We are running as root without sudo, return early
+		return nil
+	}
+
+	err = recursiveChown(fsPath, userUID, userGID)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// recursiveChown function recursively chowns a path.
+func recursiveChown(path string, uid, gid int) error {
+	return filepath.Walk(path, func(name string, info os.FileInfo, err error) error {
+		if err == nil {
+			err = os.Chown(name, uid, gid)
+		}
+
+		return err
+	})
+}
+
+var osRelease string
+
+// GetOSRelease returns the OS release of the host by inspecting /etc/*-release files.
+func GetOSRelease() string {
+	// return cached result
+	if osRelease != "" {
+		return osRelease
+	}
+	osRelease = "N/A"
+
+	matches, err := filepath.Glob("/etc/*-release")
+	if err != nil {
+		return osRelease
+	}
+
+	re := regexp.MustCompile(`(DISTRIB_DESCRIPTION|PRETTY_NAME)="(.*)"`)
+
+	for _, match := range matches {
+		data, err := os.ReadFile(match)
+		if err != nil {
+			log.Error(err)
+		}
+
+		match := re.FindSubmatch(data)
+		// [0] = whole line match, [1] = left side of "=", [2] = right side of "="
+		if len(match) >= 3 {
+			osRelease = string(match[2])
+			break
+		}
+	}
+
+	return osRelease
 }

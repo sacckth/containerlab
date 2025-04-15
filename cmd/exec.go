@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/srl-labs/containerlab/clab"
 	"github.com/srl-labs/containerlab/clab/exec"
+	"github.com/srl-labs/containerlab/cmd/common"
 	"github.com/srl-labs/containerlab/labels"
 	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/types"
@@ -25,13 +26,15 @@ var (
 
 // execCmd represents the exec command.
 var execCmd = &cobra.Command{
-	Use:     "exec",
-	Short:   "execute a command on one or multiple containers",
-	PreRunE: sudoCheck,
-	RunE:    execFn,
+	Use:   "exec",
+	Short: "execute a command on one or multiple containers",
+	RunE:  execFn,
 }
 
 func execFn(_ *cobra.Command, _ []string) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	if len(execCommands) == 0 {
 		return errors.New("provide command to execute")
 	}
@@ -41,74 +44,55 @@ func execFn(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	opts := []clab.ClabOption{
-		clab.WithTimeout(timeout),
-		clab.WithTopoFile(topo, varsFile),
-		clab.WithNodeFilter(nodeFilter),
-		clab.WithRuntime(rt,
+	opts := make([]clab.ClabOption, 0, 5)
+
+	// exec can work with or without a topology file
+	// when topology file is provided we need to parse it
+	// when topo file is not provided, we rely on labels to perform the filtering
+	if common.Topo != "" {
+		opts = append(opts, clab.WithTopoPath(common.Topo, common.VarsFile))
+	}
+
+	opts = append(opts,
+		clab.WithTimeout(common.Timeout),
+		clab.WithRuntime(common.Runtime,
 			&runtime.RuntimeConfig{
-				Debug:            debug,
-				Timeout:          timeout,
-				GracefulShutdown: graceful,
+				Debug:            common.Debug,
+				Timeout:          common.Timeout,
+				GracefulShutdown: common.Graceful,
 			},
 		),
-		clab.WithDebug(debug),
+		clab.WithDebug(common.Debug),
+	)
+
+	if common.Name != "" {
+		opts = append(opts, clab.WithLabName(common.Name))
 	}
+
 	c, err := clab.NewContainerLab(opts...)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if name == "" {
-		name = c.Config.Name
-	}
-
-	var filters []*types.GenericFilter
-	switch {
-	case len(labelsFilter) != 0:
-		filters = types.FilterFromLabelStrings(labelsFilter)
-	default:
-		// when user-defined labels are not provided we should filter the nodes of the lab
-		labFilter := []string{fmt.Sprintf("%s=%s", labels.Containerlab, c.Config.Name)}
-		filters = types.FilterFromLabelStrings(labFilter)
-	}
-
-	// list all containers using global runtime using provided filters
-	cnts, err := c.GlobalRuntime().ListContainers(ctx, filters)
+	err = c.CheckConnectivity(ctx)
 	if err != nil {
 		return err
 	}
 
-	// prepare the exec collection and the exec command
-	resultCollection := exec.NewExecCollection()
+	var filters []*types.GenericFilter
 
-	// build execs from the string input
-	var execCmds []*exec.ExecCmd
-	for _, execCmdStr := range execCommands {
-		execCmd, err := exec.NewExecCmdFromString(execCmdStr)
-		if err != nil {
-			return err
-		}
-		execCmds = append(execCmds, execCmd)
+	if len(labelsFilter) != 0 {
+		filters = types.FilterFromLabelStrings(labelsFilter)
 	}
 
-	// run the exec commands on all the containers matching the filter
-	for _, cnt := range cnts {
-		// iterate over the commands
-		for _, execCmd := range execCmds {
-			// execute the commands
-			execResult, err := cnt.RunExec(ctx, execCmd)
-			if err != nil {
-				// skip nodes that do not support exec
-				if err == exec.ErrRunExecNotSupported {
-					continue
-				}
-			}
-			resultCollection.Add(cnt.Names[0], execResult)
-		}
+	if common.Topo != "" {
+		labFilter := []string{fmt.Sprintf("%s=%s", labels.Containerlab, c.Config.Name)}
+		filters = append(filters, types.FilterFromLabelStrings(labFilter)...)
+	}
+
+	resultCollection, err := c.Exec(ctx, execCommands, clab.NewExecOptions(filters))
+	if err != nil {
+		return err
 	}
 
 	switch outputFormat {

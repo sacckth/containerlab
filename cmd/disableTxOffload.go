@@ -7,10 +7,10 @@ package cmd
 import (
 	"context"
 
-	"github.com/containernetworking/plugins/pkg/ns"
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 	"github.com/srl-labs/containerlab/clab"
+	"github.com/srl-labs/containerlab/cmd/common"
 	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/utils"
 )
@@ -22,52 +22,36 @@ var disableTxOffloadCmd = &cobra.Command{
 	Use:   "disable-tx-offload",
 	Short: "disables tx checksum offload on eth0 interface of a container",
 
+	PreRunE: common.CheckAndGetRootPrivs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := context.Background()
+
 		opts := []clab.ClabOption{
-			clab.WithTimeout(timeout),
-			clab.WithRuntime(rt,
+			clab.WithTimeout(common.Timeout),
+			clab.WithRuntime(common.Runtime,
 				&runtime.RuntimeConfig{
-					Debug:            debug,
-					Timeout:          timeout,
-					GracefulShutdown: graceful,
+					Debug:            common.Debug,
+					Timeout:          common.Timeout,
+					GracefulShutdown: common.Graceful,
 				},
 			),
-			clab.WithDebug(debug),
+			clab.WithDebug(common.Debug),
 		}
 		c, err := clab.NewContainerLab(opts...)
 		if err != nil {
 			return err
 		}
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
 
-		log.Infof("getting container '%s' information", cntName)
-
-		nodeRuntime := c.GlobalRuntime()
+		node, err := c.GetNode(cntName)
 		if err != nil {
 			return err
 		}
 
-		NSPath, err := nodeRuntime.GetNSPath(ctx, cntName)
+		err = node.ExecFunction(ctx, utils.NSEthtoolTXOff(cntName, "eth0"))
 		if err != nil {
 			return err
 		}
 
-		nodeNS, err := ns.GetNS(NSPath)
-		if err != nil {
-			return err
-		}
-		err = nodeNS.Do(func(_ ns.NetNS) error {
-			// disabling offload on lo0 interface
-			err = utils.EthtoolTXOff("eth0")
-			if err != nil {
-				log.Infof("Failed to disable TX checksum offload for 'eth0' interface for '%s' container", cntName)
-			}
-			return nil
-		})
-		if err != nil {
-			return err
-		}
 		log.Infof("Tx checksum offload disabled for eth0 interface of %s container", cntName)
 		return nil
 	},

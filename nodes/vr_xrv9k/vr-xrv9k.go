@@ -8,8 +8,9 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"regexp"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/srl-labs/containerlab/netconf"
 	"github.com/srl-labs/containerlab/nodes"
 	"github.com/srl-labs/containerlab/types"
@@ -17,12 +18,20 @@ import (
 )
 
 var (
-	kindnames          = []string{"vr-xrv9k", "vr-cisco_xrv9k"}
+	kindNames          = []string{"cisco_xrv9k", "vr-xrv9k", "vr-cisco_xrv9k"}
 	defaultCredentials = nodes.NewCredentials("clab", "clab@123")
+
+	InterfaceRegexp = regexp.MustCompile(`(?:Gi|GigabitEthernet|Te|TenGigE|TenGigabitEthernet)\s?0/0/0/(?P<port>\d+)`)
+	InterfaceOffset = 0
+	InterfaceHelp   = "GigabitEthernet0/0/0/X, Gi0/0/0/X or TenGigabitEthernet0/0/0/X, TenGigE0/0/0/X, Te0/0/0/X (where X >= 0) or ethX (where X >= 1)"
 )
 
 const (
+	generateable     = true
+	generateIfFormat = "Gi0/0/0/%d"
+
 	scrapliPlatformName = "cisco_iosxr"
+	NapalmPlatformName  = "iosxr"
 
 	configDirName   = "config"
 	startupCfgFName = "startup-config.cfg"
@@ -30,18 +39,26 @@ const (
 
 // Register registers the node in the NodeRegistry.
 func Register(r *nodes.NodeRegistry) {
-	r.Register(kindnames, func() nodes.Node {
+	generateNodeAttributes := nodes.NewGenerateNodeAttributes(generateable, generateIfFormat)
+	platformAttrs := &nodes.PlatformAttrs{
+		ScrapliPlatformName: scrapliPlatformName,
+		NapalmPlatformName:  NapalmPlatformName,
+	}
+
+	nrea := nodes.NewNodeRegistryEntryAttributes(defaultCredentials, generateNodeAttributes, platformAttrs)
+
+	r.Register(kindNames, func() nodes.Node {
 		return new(vrXRV9K)
-	}, defaultCredentials)
+	}, nrea)
 }
 
 type vrXRV9K struct {
-	nodes.DefaultNode
+	nodes.VRNode
 }
 
 func (n *vrXRV9K) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
-	// Init DefaultNode
-	n.DefaultNode = *nodes.NewDefaultNode(n)
+	// Init VRNode
+	n.VRNode = *nodes.NewVRNode(n)
 	// set virtualization requirement
 	n.HostRequirements.VirtRequired = true
 
@@ -55,7 +72,7 @@ func (n *vrXRV9K) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 		"PASSWORD":           defaultCredentials.GetPassword(),
 		"CONNECTION_MODE":    nodes.VrDefConnMode,
 		"VCPU":               "2",
-		"RAM":                "12288",
+		"RAM":                "16384",
 		"DOCKER_NET_V4_ADDR": n.Mgmt.IPv4Subnet,
 		"DOCKER_NET_V6_ADDR": n.Mgmt.IPv6Subnet,
 	}
@@ -70,8 +87,12 @@ func (n *vrXRV9K) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 	}
 
 	n.Cfg.Cmd = fmt.Sprintf("--username %s --password %s --hostname %s --connection-mode %s --vcpu %s --ram %s --trace",
-		defaultCredentials.GetUsername(), defaultCredentials.GetPassword(), n.Cfg.ShortName,
+		n.Cfg.Env["USERNAME"], n.Cfg.Env["PASSWORD"], n.Cfg.ShortName,
 		n.Cfg.Env["CONNECTION_MODE"], n.Cfg.Env["VCPU"], n.Cfg.Env["RAM"])
+
+	n.InterfaceRegexp = InterfaceRegexp
+	n.InterfaceOffset = InterfaceOffset
+	n.InterfaceHelp = InterfaceHelp
 
 	return nil
 }
@@ -97,9 +118,4 @@ func (n *vrXRV9K) SaveConfig(_ context.Context) error {
 
 	log.Infof("saved %s running configuration to startup configuration file\n", n.Cfg.ShortName)
 	return nil
-}
-
-// CheckInterfaceName checks if a name of the interface referenced in the topology file correct.
-func (n *vrXRV9K) CheckInterfaceName() error {
-	return nodes.GenericVMInterfaceCheck(n.Cfg.ShortName, n.Cfg.Endpoints)
 }

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"regexp"
 
 	"github.com/srl-labs/containerlab/nodes"
 	"github.com/srl-labs/containerlab/types"
@@ -15,29 +16,41 @@ import (
 )
 
 var (
-	kindnames          = []string{"vr-ros", "vr-mikrotik_ros"}
+	kindnames          = []string{"mikrotik_ros", "vr-ros", "vr-mikrotik_ros"}
 	defaultCredentials = nodes.NewCredentials("admin", "admin")
+
+	InterfaceRegexp = regexp.MustCompile(`ether(?P<port>\d+)`)
+	InterfaceOffset = 2
+	InterfaceHelp   = "etherX (where X >= 2) or ethX (where X >= 1)"
 )
 
 const (
 	configDirName   = "ftpboot"
 	startupCfgFName = "config.auto.rsc"
+
+	scrapliPlatformName = "mikrotik_routeros"
 )
 
 // Register registers the node in the NodeRegistry.
 func Register(r *nodes.NodeRegistry) {
+	platformAttrs := &nodes.PlatformAttrs{
+		ScrapliPlatformName: scrapliPlatformName,
+	}
+
+	nrea := nodes.NewNodeRegistryEntryAttributes(defaultCredentials, nil, platformAttrs)
+
 	r.Register(kindnames, func() nodes.Node {
 		return new(vrRos)
-	}, defaultCredentials)
+	}, nrea)
 }
 
 type vrRos struct {
-	nodes.DefaultNode
+	nodes.VRNode
 }
 
 func (n *vrRos) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
-	// Init DefaultNode
-	n.DefaultNode = *nodes.NewDefaultNode(n)
+	// Init VRNode
+	n.VRNode = *nodes.NewVRNode(n)
 	// set virtualization requirement
 	n.HostRequirements.VirtRequired = true
 
@@ -64,6 +77,10 @@ func (n *vrRos) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 	n.Cfg.Cmd = fmt.Sprintf("--username %s --password %s --hostname %s --connection-mode %s --trace",
 		defaultCredentials.GetUsername(), defaultCredentials.GetPassword(), n.Cfg.ShortName, n.Cfg.Env["CONNECTION_MODE"])
 
+	n.InterfaceRegexp = InterfaceRegexp
+	n.InterfaceOffset = InterfaceOffset
+	n.InterfaceHelp = InterfaceHelp
+
 	return nil
 }
 
@@ -74,9 +91,4 @@ func (n *vrRos) PreDeploy(_ context.Context, params *nodes.PreDeployParams) erro
 		return nil
 	}
 	return nodes.LoadStartupConfigFileVr(n, configDirName, startupCfgFName)
-}
-
-// CheckInterfaceName checks if a name of the interface referenced in the topology file correct.
-func (n *vrRos) CheckInterfaceName() error {
-	return nodes.GenericVMInterfaceCheck(n.Cfg.ShortName, n.Cfg.Endpoints)
 }

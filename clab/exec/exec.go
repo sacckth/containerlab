@@ -5,8 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 
 	"github.com/google/shlex"
 )
@@ -101,7 +102,18 @@ func (e *ExecCmd) GetCmdString() string {
 }
 
 func (e *ExecResult) String() string {
-	return fmt.Sprintf("Cmd: %s\nReturnCode: %d\nStdOut:\n%s\nStdErr:\n%s\n", e.GetCmdString(), e.ReturnCode, e.Stdout, e.Stderr)
+	var s strings.Builder
+
+	s.WriteString(fmt.Sprintf("Cmd: %s\nReturnCode: %d", e.GetCmdString(), e.ReturnCode))
+
+	if e.Stdout != "" {
+		s.WriteString(fmt.Sprintf("\nStdout: %q", e.Stdout))
+	}
+	if e.Stderr != "" {
+		s.WriteString(fmt.Sprintf("\nStderr: %q", e.Stderr))
+	}
+
+	return s.String()
 }
 
 // Dump dumps execution result as a string in one of the provided formats.
@@ -167,25 +179,33 @@ type execEntries map[string][]*ExecResult
 // ExecCollection represents a datastore for exec commands execution results.
 type ExecCollection struct {
 	execEntries
+	m sync.RWMutex
 }
 
 // NewExecCollection initializes the collection of exec command results.
 func NewExecCollection() *ExecCollection {
 	return &ExecCollection{
-		execEntries{},
+		execEntries: execEntries{},
+		m:           sync.RWMutex{},
 	}
 }
 
 func (ec *ExecCollection) Add(cId string, e *ExecResult) {
+	ec.m.Lock()
+	defer ec.m.Unlock()
 	ec.execEntries[cId] = append(ec.execEntries[cId], e)
 }
 
 func (ec *ExecCollection) AddAll(cId string, e []*ExecResult) {
+	ec.m.Lock()
+	defer ec.m.Unlock()
 	ec.execEntries[cId] = append(ec.execEntries[cId], e...)
 }
 
 // Dump dumps the contents of ExecCollection as a string in one of the provided formats.
 func (ec *ExecCollection) Dump(format string) (string, error) {
+	ec.m.RLock()
+	defer ec.m.RUnlock()
 	result := strings.Builder{}
 	switch format {
 	case ExecFormatJSON:
@@ -225,15 +245,27 @@ func (ec *ExecCollection) Dump(format string) (string, error) {
 // If execution result contains error, the error log facility is used,
 // otherwise it is logged as INFO.
 func (ec *ExecCollection) Log() {
+	ec.m.RLock()
+	defer ec.m.RUnlock()
 	for k, execResults := range ec.execEntries {
 		for _, er := range execResults {
 			switch {
 			case er.GetReturnCode() != 0:
-				log.Errorf("Failed to execute command %q on the node %q. rc=%d,\nstdout:\n%s\nstderr:\n%s",
-					er.GetCmdString(), k, er.GetReturnCode(), er.GetStdOutString(), er.GetStdErrString())
+				log.Error(
+					"Failed to execute command",
+					"command", er.GetCmdString(),
+					"node", k,
+					"rc", er.GetReturnCode(),
+					"stdout", er.GetStdOutString(),
+					"stderr", er.GetStdErrString(),
+				)
 			default:
-				log.Infof("Executed command %q on the node %q. stdout:\n%s",
-					er.GetCmdString(), k, er.GetStdOutString())
+				log.Info(
+					"Executed command",
+					"node", k,
+					"command", er.GetCmdString(),
+					"stdout", er.GetStdOutString(),
+				)
 			}
 		}
 	}

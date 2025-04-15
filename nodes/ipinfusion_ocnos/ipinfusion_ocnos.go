@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/srl-labs/containerlab/netconf"
 	"github.com/srl-labs/containerlab/nodes"
 	"github.com/srl-labs/containerlab/types"
@@ -17,18 +17,27 @@ import (
 
 var (
 	kindnames          = []string{"ipinfusion_ocnos"}
-	defaultCredentials = nodes.NewCredentials("admin", "admin")
+	defaultCredentials = nodes.NewCredentials("admin", "admin@123")
 )
 
 const (
 	scrapliPlatformName = "ipinfusion_ocnos"
+	generateable        = false
+	generateIfFormat    = ""
 )
 
 // Register registers the node in the NodeRegistry.
 func Register(r *nodes.NodeRegistry) {
+	generateNodeAttributes := nodes.NewGenerateNodeAttributes(generateable, generateIfFormat)
+	platformAttrs := &nodes.PlatformAttrs{
+		ScrapliPlatformName: scrapliPlatformName,
+	}
+
+	nrea := nodes.NewNodeRegistryEntryAttributes(defaultCredentials, generateNodeAttributes, platformAttrs)
+
 	r.Register(kindnames, func() nodes.Node {
 		return new(IPInfusionOcNOS)
-	}, defaultCredentials)
+	}, nrea)
 }
 
 type IPInfusionOcNOS struct {
@@ -86,5 +95,5 @@ func (n *IPInfusionOcNOS) SaveConfig(_ context.Context) error {
 
 // CheckInterfaceName checks if a name of the interface referenced in the topology file correct.
 func (n *IPInfusionOcNOS) CheckInterfaceName() error {
-	return nodes.GenericVMInterfaceCheck(n.Cfg.ShortName, n.Cfg.Endpoints)
+	return nodes.GenericVMInterfaceCheck(n.Cfg.ShortName, n.Endpoints)
 }

@@ -5,13 +5,13 @@ import (
 	"os"
 	"strings"
 
-	"github.com/klauspost/cpuid"
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
+	"github.com/klauspost/cpuid/v2"
 )
 
 // VerifySSSE3Support check if SSSE3 is supported on the host.
 func VerifySSSE3Support() bool {
-	return cpuid.CPU.SSSE3()
+	return cpuid.CPU.Has(cpuid.SSSE3)
 }
 
 // VerifyVirtSupport checks if virtualization is supported by a cpu in case topology contains VM-based nodes
@@ -27,7 +27,7 @@ func VerifyVirtSupport() bool {
 		log.Debug("/proc/2/status file was not found. This means we run in a container and no virt checks are possible")
 		return true
 	}
-	defer f.Close() //skipcq: GO-S2307
+	defer f.Close() // skipcq: GO-S2307
 
 	// read first line of a /proc/2/status file to check if it contains kthreadd
 	// if it doesn't, we are in a container
@@ -44,7 +44,7 @@ func VerifyVirtSupport() bool {
 		log.Debugf("Error checking VirtSupport: %v", err)
 		return false
 	}
-	defer f.Close() //skipcq: GO-S2307
+	defer f.Close() // skipcq: GO-S2307
 
 	scanner = bufio.NewScanner(f)
 

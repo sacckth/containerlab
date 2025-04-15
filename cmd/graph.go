@@ -11,17 +11,13 @@ import (
 	"html/template"
 	"sort"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 	"github.com/srl-labs/containerlab/clab"
+	"github.com/srl-labs/containerlab/cmd/common"
 	"github.com/srl-labs/containerlab/labels"
 	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/types"
-)
-
-const (
-	defaultGraphTemplatePath = "/etc/containerlab/templates/graph/nextui/nextui.html"
-	defaultStaticPath        = "/etc/containerlab/templates/graph/nextui/static"
 )
 
 var (
@@ -31,6 +27,9 @@ var (
 	dot              bool
 	mermaid          bool
 	mermaidDirection string
+	drawio           bool
+	drawioVersion    string
+	drawioArgs       []string
 	staticDir        string
 )
 
@@ -46,19 +45,24 @@ func graphFn(_ *cobra.Command, _ []string) error {
 	var err error
 
 	opts := []clab.ClabOption{
-		clab.WithTimeout(timeout),
-		clab.WithTopoFile(topo, varsFile),
-		clab.WithNodeFilter(nodeFilter),
-		clab.WithRuntime(rt,
+		clab.WithTimeout(common.Timeout),
+		clab.WithTopoPath(common.Topo, common.VarsFile),
+		clab.WithNodeFilter(common.NodeFilter),
+		clab.WithRuntime(common.Runtime,
 			&runtime.RuntimeConfig{
-				Debug:            debug,
-				Timeout:          timeout,
-				GracefulShutdown: graceful,
+				Debug:            common.Debug,
+				Timeout:          common.Timeout,
+				GracefulShutdown: common.Graceful,
 			},
 		),
-		clab.WithDebug(debug),
+		clab.WithDebug(common.Debug),
 	}
 	c, err := clab.NewContainerLab(opts...)
+	if err != nil {
+		return err
+	}
+
+	err = c.ResolveLinks()
 	if err != nil {
 		return err
 	}
@@ -69,6 +73,10 @@ func graphFn(_ *cobra.Command, _ []string) error {
 
 	if mermaid {
 		return c.GenerateMermaidGraph(mermaidDirection)
+	}
+
+	if drawio {
+		return c.GenerateDrawioDiagram(drawioVersion, drawioArgs)
 	}
 
 	gtopo := clab.GraphTopo{
@@ -105,11 +113,17 @@ func graphFn(_ *cobra.Command, _ []string) error {
 		return gtopo.Nodes[i].Name < gtopo.Nodes[j].Name
 	})
 	for _, l := range c.Links {
+
+		eps := l.GetEndpoints()
+
+		ifaceDisplayNameA := eps[0].GetIfaceDisplayName()
+		ifaceDisplayNameB := eps[1].GetIfaceDisplayName()
+
 		gtopo.Links = append(gtopo.Links, clab.Link{
-			Source:         l.A.Node.ShortName,
-			SourceEndpoint: l.A.EndpointName,
-			Target:         l.B.Node.ShortName,
-			TargetEndpoint: l.B.EndpointName,
+			Source:         eps[0].GetNode().GetShortName(),
+			SourceEndpoint: ifaceDisplayNameA,
+			Target:         eps[1].GetNode().GetShortName(),
+			TargetEndpoint: ifaceDisplayNameB,
 		})
 	}
 
@@ -135,12 +149,17 @@ func init() {
 		"use only information from topo file when building graph")
 	graphCmd.Flags().BoolVarP(&dot, "dot", "", false, "generate dot file")
 	graphCmd.Flags().BoolVarP(&mermaid, "mermaid", "", false, "print mermaid flowchart to stdout")
-	graphCmd.MarkFlagsMutuallyExclusive("dot", "mermaid")
 	graphCmd.Flags().StringVarP(&mermaidDirection, "mermaid-direction", "", "TD", "specify direction of mermaid dirgram")
-	graphCmd.Flags().StringVarP(&tmpl, "template", "", defaultGraphTemplatePath,
+	graphCmd.Flags().StringSliceVar(&drawioArgs, "drawio-args", []string{},
+		"Additional flags to pass to the drawio diagram generation tool (can be specified multiple times)")
+	graphCmd.Flags().BoolVarP(&drawio, "drawio", "", false, "generate drawio diagram file")
+	graphCmd.Flags().StringVarP(&drawioVersion, "drawio-version", "", "latest",
+		"version of the clab-io-draw container to use for generating drawio diagram file")
+	graphCmd.Flags().StringVarP(&tmpl, "template", "", "",
 		"Go html template used to generate the graph")
-	graphCmd.Flags().StringVarP(&staticDir, "static-dir", "", defaultStaticPath,
+	graphCmd.Flags().StringVarP(&staticDir, "static-dir", "", "",
 		"Serve static files from the specified directory")
-	graphCmd.Flags().StringSliceVarP(&nodeFilter, "node-filter", "", []string{},
+	graphCmd.Flags().StringSliceVarP(&common.NodeFilter, "node-filter", "", []string{},
 		"comma separated list of nodes to include")
+	graphCmd.MarkFlagsMutuallyExclusive("dot", "mermaid", "drawio")
 }

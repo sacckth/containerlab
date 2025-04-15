@@ -15,20 +15,28 @@ import (
 )
 
 var (
-	kindnames          = []string{"vr-ftosv", "vr-dell_ftosv"}
+	kindnames          = []string{"dell_ftosv", "vr-ftosv", "vr-dell_ftosv"}
 	defaultCredentials = nodes.NewCredentials("admin", "admin")
 )
 
 const (
 	configDirName   = "config"
 	startupCfgFName = "startup-config.cfg"
+
+	scrapliPlatformName = "dell_emc"
 )
 
 // Register registers the node in the NodeRegistry.
 func Register(r *nodes.NodeRegistry) {
+	platformAttrs := &nodes.PlatformAttrs{
+		ScrapliPlatformName: scrapliPlatformName,
+	}
+
+	nrea := nodes.NewNodeRegistryEntryAttributes(defaultCredentials, nil, platformAttrs)
+
 	r.Register(kindnames, func() nodes.Node {
 		return new(vrFtosv)
-	}, defaultCredentials)
+	}, nrea)
 }
 
 type vrFtosv struct {
@@ -80,5 +88,5 @@ func (n *vrFtosv) PreDeploy(_ context.Context, params *nodes.PreDeployParams) er
 
 // CheckInterfaceName checks if a name of the interface referenced in the topology file correct.
 func (n *vrFtosv) CheckInterfaceName() error {
-	return nodes.GenericVMInterfaceCheck(n.Cfg.ShortName, n.Cfg.Endpoints)
+	return nodes.GenericVMInterfaceCheck(n.Cfg.ShortName, n.Endpoints)
 }

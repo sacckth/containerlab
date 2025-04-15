@@ -2,74 +2,201 @@
 hide:
   - navigation
 ---
-Containerlab is distributed as a Linux deb/rpm package and can be installed on any Debian- or RHEL-like distributive in a matter of a few seconds.
 
-### Pre-requisites
+# Installation
+
+Containerlab is distributed as a Linux deb/rpm/apk package for amd64 and arm64 architectures and can be installed on any Debian- or RHEL-like distributive in a matter of a few seconds.
+
+## Pre-requisites
+
 The following requirements must be satisfied to let containerlab tool run successfully:
 
 * A user should have `sudo` privileges to run containerlab.
-* A Linux server/VM[^2] and [Docker](https://docs.docker.com/engine/install/) installed.
+* A Linux server/VM[^1] and [Docker](https://docs.docker.com/engine/install/) installed.
 * Load container images (e.g. Nokia SR Linux, Arista cEOS) that are not downloadable from a container registry. Containerlab will try to pull images at runtime if they do not exist locally.
 
-### Install script
-Containerlab can be installed using the [installation script](https://github.com/srl-labs/containerlab/blob/main/get.sh) which detects the operating system type and installs the relevant package:
+## Quick setup
 
-!!! note
-    Containerlab is distributed via deb/rpm packages, thus only Debian- and RHEL-like distributives can leverage package installation.  
-    Other systems can follow the [manual installation](#manual-installation) procedure.
+The easiest way to get started with containerlab is to use the [quick setup script](https://github.com/srl-labs/containerlab/blob/main/utils/quick-setup.sh) that installs all of the following components in one go (or allows to install them separately):
+
+* docker (docker-ce), docker compose
+* Containerlab (using the package repository)
+* [`gh`](https://cli.github.com/) CLI tool
+
+The script has been tested on the following OSes:
+
+* Ubuntu 20.04, 22.04, 23.10, 24.04
+* Debian 11, 12
+* Red Hat Enterprise Linux 9
+* CentOS Stream 9
+* Fedora Server 40 (should work on other variants of Fedora)
+* Rocky Linux 9.3, 8.8 (should work on any 9.x and 8.x release)
+
+To install all components at once, run the following command on any of the supported OSes:
+<!-- --8<-- [start:quick-setup-script-cmd] -->
+```bash
+curl -sL https://containerlab.dev/setup | sudo -E bash -s "all"
+```
+<!-- --8<-- [end:quick-setup-script-cmd] -->
+
+By default, this will also configure sshd on the system to increase max auth tries so unknown keys don't lock ssh attempts.
+This behavior can be turned off by setting the environment variable "SETUP_SSHD" to "false" **before** running the command shown above.
+The environment variable can be set and exported with the command shown below.
 
 ```bash
-# download and install the latest release (may require sudo)
+export SETUP_SSHD="false"
+```
+
+To complete installation and enable sudo-less `docker` command execution, please run `newgrp docker` or logout and log back in.
+
+Containerlab is also set up for sudo-less operation, and the user executing the quick install script is automatically granted access to privileged commands. For further information, see [Sudo-less operation](#sudo-less-operation).
+
+To install an individual component, specify the function name as an argument to the script. For example, to install only `docker`:
+
+```bash
+curl -sL https://containerlab.dev/setup | sudo -E bash -s "install-docker"
+```
+
+If you don't have your own shell configuration and want to have a slightly better bash PS1 prompt you can also run this script:
+
+```bash
+curl -sL https://containerlab.dev/setup | sudo -E bash -s "setup-bash-prompt"
+```
+
+Log out and log back in to see the new two-line prompt in action:
+
+```bash
+[*]─[clab]─[~]
+└──>
+```
+
+## Install script
+
+Containerlab can be installed using the [installation script](https://github.com/srl-labs/containerlab/blob/main/get.sh) that detects the operating system type and installs the relevant package:
+
+/// note
+Containerlab is distributed via deb/rpm packages, thus only Debian- and RHEL-like distributives can leverage package installation.  
+Other systems can follow the [manual installation](#manual-installation) procedure.
+///
+
+/// tab | Latest release
+
+Download and install the latest release (may require `sudo`):
+<!-- --8<-- [start:install-script-cmd] -->
+```{.bash .no-select}
 bash -c "$(curl -sL https://get.containerlab.dev)"
+```
+<!-- --8<-- [end:install-script-cmd] -->
+///
 
-# download a specific version - 0.10.3 (may require sudo)
+/// tab | Specific version
+
+Download a specific version. Versions can be found on the [Releases](https://github.com/srl-labs/containerlab/releases) page.
+
+```bash
 bash -c "$(curl -sL https://get.containerlab.dev)" -- -v 0.10.3
+```
 
+///
+
+/// tab | with `wget`
+
+```bash
 # with wget
 bash -c "$(wget -qO - https://get.containerlab.dev)"
 ```
 
-### Package managers
+///
+
+## Package managers
+
 It is possible to install official containerlab releases via public APT/YUM repository.
 
-=== "APT"
-    ```bash
-    echo "deb [trusted=yes] https://apt.fury.io/netdevops/ /" | \
-    sudo tee -a /etc/apt/sources.list.d/netdevops.list
+/// tab | APT
 
-    sudo apt update && sudo apt install containerlab
-    ```
-=== "YUM"
-    ```
-    yum-config-manager --add-repo=https://yum.fury.io/netdevops/ && \
-    echo "gpgcheck=0" | sudo tee -a /etc/yum.repos.d/yum.fury.io_netdevops_.repo
+```bash
+echo "deb [trusted=yes] https://netdevops.fury.site/apt/ /" | \
+sudo tee -a /etc/apt/sources.list.d/netdevops.list
 
-    sudo yum install containerlab
-    ```
-=== "APK"
-    Download `.apk` package from [Github releases](https://github.com/srl-labs/containerlab/releases).
-=== "AUR"
-    Arch Linux users can download a package from this [AUR repository](https://aur.archlinux.org/packages/containerlab-bin).
+sudo apt update && sudo apt install containerlab
+```
 
-??? "Manual package installation"
-    Alternatively, users can manually download the deb/rpm package from the [Github releases](https://github.com/srl-labs/containerlab/releases) page.
+///
 
-    example:
-    ```bash
-    # manually install latest release with package managers
-    LATEST=$(curl -s https://github.com/srl-labs/containerlab/releases/latest | sed -e 's/.*tag\/v\(.*\)\".*/\1/')
-    # with yum
-    yum install "https://github.com/srl-labs/containerlab/releases/download/v${LATEST}/containerlab_${LATEST}_linux_amd64.rpm"
-    # with dpkg
-    curl -sL -o /tmp/clab.deb "https://github.com/srl-labs/containerlab/releases/download/v${LATEST}/containerlab_${LATEST}_linux_amd64.deb" && dpkg -i /tmp/clab.deb
+/// tab | YUM
 
-    # install specific release with yum
-    yum install https://github.com/srl-labs/containerlab/releases/download/v0.7.0/containerlab_0.7.0_linux_386.rpm
-    ```
+```
+sudo yum-config-manager --add-repo=https://netdevops.fury.site/yum/ && \
+echo "gpgcheck=0" | sudo tee -a /etc/yum.repos.d/netdevops.fury.site_yum_.repo
 
+sudo yum install containerlab
+```
+
+///
+
+//// tab | DNF4
+
+```bash
+sudo dnf config-manager -y --add-repo "https://netdevops.fury.site/yum/" && \
+echo "gpgcheck=0" | sudo tee -a /etc/yum.repos.d/netdevops.fury.site_yum_.repo
+
+sudo dnf install containerlab
+```
+
+////
+
+//// tab | DNF5
+
+```bash
+sudo dnf config-manager addrepo --set=baseurl="https://netdevops.fury.site/yum/" && \
+echo "gpgcheck=0" | sudo tee -a /etc/yum.repos.d/netdevops.fury.site_yum_.repo
+
+sudo dnf install containerlab
+```
+
+////
+
+/// tab | APK
+Download `.apk` package from [Github releases](https://github.com/srl-labs/containerlab/releases).
+///
+
+/// tab | AUR
+Arch Linux users can download a package from this [AUR repository](https://aur.archlinux.org/packages/containerlab-bin).
+///
+
+/// details | Manual package installation
+Alternatively, users can manually download the deb/rpm package from the [Github releases](https://github.com/srl-labs/containerlab/releases) page.
+
+example:
+
+```bash
+# manually install latest release with package managers
+LATEST=$(curl -s https://github.com/srl-labs/containerlab/releases/latest | sed -e 's/.*tag\/v\(.*\)\".*/\1/')
+# with yum
+yum install "https://github.com/srl-labs/containerlab/releases/download/v${LATEST}/containerlab_${LATEST}_linux_amd64.rpm"
+# with dpkg
+curl -sL -o /tmp/clab.deb "https://github.com/srl-labs/containerlab/releases/download/v${LATEST}/containerlab_${LATEST}_linux_amd64.deb" && dpkg -i /tmp/clab.deb
+
+# install specific release with yum
+yum install https://github.com/srl-labs/containerlab/releases/download/v0.7.0/containerlab_0.7.0_linux_386.rpm
+```
+
+///
 The package installer will put the `containerlab` binary in the `/usr/bin` directory as well as create the `/usr/bin/clab -> /usr/bin/containerlab` symlink. The symlink allows the users to save on typing when they use containerlab: `clab <command>`.
+Containerlab is also set up for sudo-less operation, and the current user (even if the package manager was called through `sudo`) is automatically granted access to privileged Containerlab commands. For further information, see [Sudo-less operation](#sudo-less-operation).
 
-### Container
+## Windows
+
+Containerlab runs on Windows powered by Windows Subsystem Linux (aka WSL), where you can run Containerlab directly or in a Devcontainer. Open up [**Containerlab on Windows**](windows.md) documentation for more details.
+
+## Apple macOS
+
+Running containerlab on macOS is possible both on ARM (M1/M2/M3/etc) and Intel chipsets. For a long time, we had many caveats around M-chipsets on Macs, but with the introduction of ARM64-native NOSes like Nokia SR Linux and Arista cEOS, powered by Rosetta emulation for x86_64-based NOSes, it is now possible to run containerlab on ARM-based Macs.
+
+Since we wanted to share our experience with running containerlab on macOS in details, we have created a separate - [**Containerlab on macOS**](macos.md) - guide.
+
+## Container
+
 Containerlab is also available in a container packaging. The latest containerlab release can be pulled with:
 
 ```
@@ -97,16 +224,20 @@ docker run --rm -it --privileged \
 
 Within the started container you can use the same `containerlab deploy/destroy/inspect` commands to manage your labs.
 
-!!!note
-    Containerlab' container command is itself `containerlab`, so you can deploy a lab without invoking a shell, for example:
-    ```bash
-    docker run --rm -it --privileged \
-    # <run options omitted>
-    -w $(pwd) \
-    ghcr.io/srl-labs/clab deploy -t somelab.clab.yml
-    ```
+/// note
+Containerlab' container command is itself `containerlab`, so you can deploy a lab without invoking a shell, for example:
 
-### Manual installation
+```bash
+docker run --rm -it --privileged \
+# <run options omitted>
+-w $(pwd) \
+ghcr.io/srl-labs/clab deploy -t somelab.clab.yml
+```
+
+///
+
+## Manual installation
+
 If the linux distributive can't install deb/rpm packages, containerlab can be installed from the archive:
 
 ```bash
@@ -127,167 +258,62 @@ tar -zxvf /tmp/clab.tar.gz -C /etc/containerlab
 mv /etc/containerlab/containerlab /usr/bin && chmod a+x /usr/bin/containerlab
 ```
 
-### Windows Subsystem Linux (WSL)
-Containerlab [runs](https://twitter.com/ntdvps/status/1380915270328401922) on WSL, but you need to [install docker-ce](https://docs.docker.com/engine/install/) inside the WSL2 linux system instead of using Docker Desktop[^3].
+## Upgrade
 
-If you are running Ubuntu 20.04 as your WSL2 machine, you can run [this script](https://gist.github.com/hellt/e8095c1719a3ea0051165ff282d2b62a) to install docker-ce.
-
-```bash
-curl -L https://gist.githubusercontent.com/hellt/e8095c1719a3ea0051165ff282d2b62a/raw/1dffb71d0495bb2be953c489cd06a25656d974a4/docker-install.sh | \
-bash
-```
-
-Once installed, issue `sudo service docker start` to start the docker service inside WSL2 machine.
-
-??? "Running VM-based routers inside WSL"
-    At the moment of this writing, KVM support was not available out-of-the box with WSL2 VMs. There are [ways](https://www.reddit.com/r/bashonubuntuonwindows/comments/ldbyxa/what_is_the_current_state_of_kvm_acceleration_on/) to enable KVM support, but they were not tested with containerlab. This means that running traditional VM based routers via [vrnetlab integration](manual/vrnetlab.md) is not readily available.
-
-    It appears to be that next versions of WSL2 kernels will support KVM.
-
-### Mac OS
-Running containerlab on Mac OS is possible[^4] by means of a separate docker image with containerlab inside.
-
-!!!warning
-    ARM-based Macs (M1/2) are not supported, and no binaries are generated for this platform. This is mainly due to the lack of network images built for arm64 architecture as of now.
-
-To use this container use the following command:
-
-```shell linenums="1"
-CLAB_WORKDIR=~/clab
-
-docker run --rm -it --privileged \
-    --network host \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v /run/netns:/run/netns \
-    --pid="host" \
-    -w $CLAB_WORKDIR \
-    -v $CLAB_WORKDIR:$CLAB_WORKDIR \
-    ghcr.io/srl-labs/clab bash
-```
-
-The first command in the snippet above sets the working directory which you intend to use on your Mac OS. The `~/clab` in the example above expands to `/Users/<username>/clab` and means that we intent to have our containerlab labs to be stored in this directory.
-
-!!!note
-    1. It is best to create a directory under the `~/some/path` unless you know what to do[^5]
-    2. vrnetlab based nodes will not be able to start, since Docker VM does not support virtualization.
-    3. Docker Desktop for Mac introduced cgroups v2 support in 4.3.0 version; to support the images that require cgroups v1 follow [these instructions](https://github.com/docker/for-mac/issues/6073).
-    4. Docker Desktop relies on a LinuxKit based HyperKit VM. Unfortunately, it is shipped with a minimalist kernel, and some modules such as VRF are disabled by default. Follow [these instructions](https://medium.com/@notsinge/making-your-own-linuxkit-with-docker-for-mac-5c1234170fb1) to rebuild it with more modules. 
-
-When the container is started, you will have a bash shell opened with the directory contents mounted from the Mac OS. There you can use `containerlab` commands right away.
-
-???tip "Step by step example"
-    Let's imagine I want to run a lab with two SR Linux containers running directly on a Mac OS.
-
-    First, I need to have Docker Desktop for Mac installed and running.
-
-    Then I will create a directory under the `$HOME` path on my mac:
-
-    ```
-    mkdir -p ~/clab
-    ```
-
-    Then I will create a clab file defining my lab in the newly created directory:
-
-    ```bash
-    cat <<EOF > ~/clab/2srl.clab.yml
-    name: 2srl
-
-    topology:
-      nodes:
-        srl1:
-          kind: srl
-          image: ghcr.io/nokia/srlinux
-        srl2:
-          kind: srl
-          image: ghcr.io/nokia/srlinux
-
-      links:
-        - endpoints: ["srl1:e1-1", "srl2:e1-1"]
-    EOF
-    ```
-
-    Now when the clab file is there, launch the container and don't forget to use path to the directory you created:
-
-    ```bash
-    CLAB_WORKDIR=~/clab
-
-    docker run --rm -it --privileged \
-        --network host \
-        -v /var/run/docker.sock:/var/run/docker.sock \
-        -v /run/netns:/run/netns \
-        --pid="host" \
-        -w $CLAB_WORKDIR \
-        -v $CLAB_WORKDIR:$CLAB_WORKDIR \
-        ghcr.io/srl-labs/clab bash
-    ```
-
-    Immediately you will get into the directory inside the container with your lab file available:
-
-    ```
-    root@docker-desktop:/Users/romandodin/clab# ls
-    2srl.clab.yml
-    ```
-
-    Now you can launch the lab, as containerlab is already part of the image:
-    ```
-    root@docker-desktop:/Users/romandodin/clab# clab dep -t 2srl.clab.yml
-    INFO[0000] Parsing & checking topology file: 2srl.clab.yml 
-    INFO[0000] Creating lab directory: /Users/romandodin/clab/clab-2srl 
-    INFO[0000] Creating root CA                             
-    INFO[0000] Creating docker network: Name='clab', IPv4Subnet='172.20.20.0/24', IPv6Subnet='2001:172:20:20::/64', MTU='1500' 
-    INFO[0000] Creating container: srl1                     
-    INFO[0000] Creating container: srl2                     
-    INFO[0001] Creating virtual wire: srl1:e1-1 <--> srl2:e1-1 
-    INFO[0001] Adding containerlab host entries to /etc/hosts file 
-    +---+----------------+--------------+-----------------------+------+-------+---------+----------------+----------------------+
-    | # |      Name      | Container ID |         Image         | Kind | Group |  State  |  IPv4 Address  |     IPv6 Address     |
-    +---+----------------+--------------+-----------------------+------+-------+---------+----------------+----------------------+
-    | 1 | clab-2srl-srl1 | 574bf836fb40 | ghcr.io/nokia/srlinux | srl  |       | running | 172.20.20.2/24 | 2001:172:20:20::2/64 |
-    | 2 | clab-2srl-srl2 | f88531a74ffb | ghcr.io/nokia/srlinux | srl  |       | running | 172.20.20.3/24 | 2001:172:20:20::3/64 |
-    +---+----------------+--------------+-----------------------+------+-------+---------+----------------+----------------------+
-    ```
-
-
-
-### Upgrade
-To upgrade `containerlab` to the latest available version issue the following command[^1]:
+To upgrade `containerlab` to the latest available version issue the following command[^2]:
 
 ```
-containerlab version upgrade
+sudo -E containerlab version upgrade
 ```
 
-This command will fetch the installation script and will upgrade the tool to its most recent version.
+This command will fetch the installation script and will upgrade the tool to its most recent version. In case of GitHub rate limit, provide `GITHUB_TOKEN` env var with your personal GitHub token to the upgrade command.
 
-or leverage `apt`/`yum` utilities if containerlab repo was added as explained in the [Package managers](#package-managers) section.
+Or leverage `apt`/`yum` utilities if containerlab repo was added as explained in the [Package managers](#package-managers) section.
 
-### From source
+## From source
+
 To build containerlab from source:
 
-=== "with go build"
-    To build containerlab from source, clone the repository and issue `go build` at its root.
-=== "with goreleaser"
-    When we release containerlab we use [goreleaser](https://goreleaser.com/) project to build binaries for all supported platforms as well as the deb/rpm packages.  
-    Users can install `goreleaser` and do the same locally by issuing the following command:
-    ```
-    goreleaser --snapshot --skip-publish --rm-dist
-    ```
+/// tab | with `go build`
+To build containerlab from source, clone the repository and issue `go build` at its root.
+///
 
-### Uninstall
+/// tab | with goreleaser
+When we release containerlab we use [goreleaser](https://goreleaser.com/) project to build binaries for all supported platforms as well as the deb/rpm packages.  
+Users can install `goreleaser` and do the same locally by issuing the following command:
+
+```
+goreleaser --snapshot --skip-publish --rm-dist
+```
+
+///
+
+## Uninstall
+
 To uninstall containerlab when it was installed via installation script or packages:
 
-=== "Debian-based system"
-    ```
-    apt remove containerlab
-    ```
-=== "RPM-based systems"
-    ```
-    yum remove containerlab
-    ```
-=== "Manual removal"
-    Containerlab binary is located at `/usr/bin/containerlab`. In addition to the binary, containerlab directory with static files may be found at `/etc/containerlab`.
+/// tab | Debian-based system
 
+```
+apt remove containerlab
+```
 
-### SELinux
+///
+
+/// tab | RPM-based systems
+
+```
+yum remove containerlab
+```
+
+///
+
+/// tab | Manual removal
+Containerlab binary is located at `/usr/bin/containerlab`. In addition to the binary, containerlab directory with static files may be found at `/etc/containerlab`.
+///
+
+## SELinux
+
 When SELinux set to enforced mode containerlab binary might fail to execute with `Segmentation fault (core dumped)` error. This might be because containerlab binary is compressed with [upx](https://upx.github.io/) and selinux prevents it from being decompressed by default.
 
 To fix this:
@@ -303,8 +329,83 @@ or more globally:
 sudo setsebool -P selinuxuser_execmod 1
 ```
 
-[^1]: only available if installed from packages
-[^2]: Most containerized NOS will require >1 vCPU. RAM size depends on the lab size. Architecture: AMD64.
-[^3]: No need to uninstall Docker Desktop, just make sure that it is not integrated with WSL2 machine that you intend to use with containerlab. Moreover, you can make it even work with Docker Desktop with a [few additional steps](https://twitter.com/networkop1/status/1380976461641834500/photo/1), but installing docker-ce into the WSL maybe more intuitive.
-[^4]: kudos to Michael Kashin who [shared](https://github.com/srl-labs/containerlab/issues/577#issuecomment-895847387) this approach with us
-[^5]: otherwise make sure to add a custom shared directory to the docker on mac.
+## Sudo-less operation
+
+Containerlab requires root privileges to perform certain operations.
+
+To simplify usage, by default, Containerlab is installed as a _SUID binary_[^3] to permit sudo-less operation.
+
+/// details | Enabling sudo-less operations for manually built/installed Containerlab
+    type: subtle-note
+To enable sudo-less operation for users who who manually built and installed Containerlab, or did not use a package manager to install it, the following commands need to be run:
+
+```bash
+# Set SUID bit on Containerlab binary
+sudo chmod u+s `which containerlab`
+# Create clab_admins Unix group
+sudo groupadd -r clab_admins
+# Add current user to clab_admins group
+sudo usermod -aG clab_admins "$USER"
+```
+
+Users who manage their Containerlab installation via `deb/yum/dnf` package managers will have the sudo-less functionality automatically enabled during the first upgrade from pre-`0.63.0` versions.
+
+To check whether Containerlab is enabled for sudo-less operations, run the following commands:
+
+```{.bash .no-select}
+ls -hal `which containerlab`
+```
+
+<div class="embed-result">
+```{.bash .no-select .no-copy}
+-rwsr-xr-x 1 root root 131M Jan 17 17:56 /usr/bin/containerlab
+#  ^ SUID bit set, owned by root
+```
+</div>
+```{.bash .no-select}
+groups
+```
+<div class="embed-result">
+```{.bash .no-select .no-copy}
+... clab_admins ...
+#   ^ user is member of clab_admins group
+```
+</div>
+
+///
+
+Additionally, to prevent unauthorized users from gaining root-level privileges through Containerlab, the usage of privileged Containerlab commands is gated behind a Unix user group membership check. Privileged Containerlab commands can only be performed by users who are part of the `clab_admins` group.  
+By default (starting with version `0.63.0`), the `clab_admins` Unix group is created during the initial installation of Containerlab, and the user installing Containerlab is automatically added to this user group. Additional users who require access to privileged Containerlab commands should also be added to this user group.
+
+Users who are _not_ part of this group can still execute non-privileged commands, such as:
+
+* exec (requires `docker` group membership)
+* generate
+* graph
+* inspect (requires `docker` group membership)
+* save
+* version (no upgrade)
+
+Non-privileged commands are executed as the user running the Containerlab commands. Privileged commands are executed as root during runtime.  
+Non-privileged command execution is only supported when the default container runtime, Docker.
+
+To allow _any user on the host_ to use all Containerlab commands, simply delete the `clab_admins` Unix group.
+
+/// danger
+Much like the `docker` group, any users part of the `clab_admins` group are effectively given root-level privileges to the system running Containerlab.
+
+**If this group does not exist and the binary still has the SUID bit set, any user who can run Containerlab should be treated as having root privileges.**
+///
+
+To **disable sudo-less operation**, simply unset the SUID flag on the Containerlab binary:
+
+```
+sudo chmod u-s `which containerlab`
+```
+
+Containerlab installers will **not** attempt to set the SUID flag or create the `clab_admins` group as long as the empty file `/etc/containerlab/suid_setup_done` exists.  
+This file is automatically created during the first installation of Containerlab `0.63.0` or newer.
+
+[^1]: Most containerized NOS will require >1 vCPU. RAM size depends on the lab size. IPv6 should not be disabled in the kernel.
+[^2]: only available if installed from packages
+[^3]: SUID, or "set user ID", is a special permission bit that can be set on Unix systems. SUID binaries run as the owner of the file, rather than as the executing user.

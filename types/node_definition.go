@@ -4,7 +4,7 @@ import (
 	"os"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"gopkg.in/yaml.v2"
 )
 
@@ -14,34 +14,38 @@ const (
 
 // NodeDefinition represents a configuration a given node can have in the lab definition file.
 type NodeDefinition struct {
-	Kind                 string            `yaml:"kind,omitempty"`
-	Group                string            `yaml:"group,omitempty"`
-	Type                 string            `yaml:"type,omitempty"`
-	StartupConfig        string            `yaml:"startup-config,omitempty"`
-	StartupDelay         uint              `yaml:"startup-delay,omitempty"`
-	EnforceStartupConfig bool              `yaml:"enforce-startup-config,omitempty"`
-	AutoRemove           *bool             `yaml:"auto-remove,omitempty"`
-	Config               *ConfigDispatcher `yaml:"config,omitempty"`
-	Image                string            `yaml:"image,omitempty"`
-	ImagePullPolicy      string            `yaml:"image-pull-policy,omitempty"`
-	License              string            `yaml:"license,omitempty"`
-	Position             string            `yaml:"position,omitempty"`
-	Entrypoint           string            `yaml:"entrypoint,omitempty"`
-	Cmd                  string            `yaml:"cmd,omitempty"`
-	// list of subject Alternative Names (SAN) to be added to the node's certificate
-	SANs []string `yaml:"SANs,omitempty"`
+	Kind                  string            `yaml:"kind,omitempty"`
+	Group                 string            `yaml:"group,omitempty"`
+	Type                  string            `yaml:"type,omitempty"`
+	StartupConfig         string            `yaml:"startup-config,omitempty"`
+	StartupDelay          uint              `yaml:"startup-delay,omitempty"`
+	EnforceStartupConfig  *bool             `yaml:"enforce-startup-config,omitempty"`
+	SuppressStartupConfig *bool             `yaml:"suppress-startup-config,omitempty"`
+	AutoRemove            *bool             `yaml:"auto-remove,omitempty"`
+	RestartPolicy         string            `yaml:"restart-policy,omitempty"`
+	Config                *ConfigDispatcher `yaml:"config,omitempty"`
+	Image                 string            `yaml:"image,omitempty"`
+	ImagePullPolicy       string            `yaml:"image-pull-policy,omitempty"`
+	License               string            `yaml:"license,omitempty"`
+	Position              string            `yaml:"position,omitempty"`
+	Entrypoint            string            `yaml:"entrypoint,omitempty"`
+	Cmd                   string            `yaml:"cmd,omitempty"`
 	// list of commands to run in container
 	Exec []string `yaml:"exec,omitempty"`
 	// list of bind mount compatible strings
 	Binds []string `yaml:"binds,omitempty"`
+	// list of devices to map in the container
+	Devices []string `yaml:"devices,omitempty"`
+	// List of capabilities to add for the container
+	CapAdd []string `yaml:"cap-add,omitempty"`
+	// Set the shared memory size allocated to the container
+	ShmSize string `yaml:"shm-size,omitempty"`
 	// list of port bindings
 	Ports []string `yaml:"ports,omitempty"`
 	// user-defined IPv4 address in the management network
 	MgmtIPv4 string `yaml:"mgmt-ipv4,omitempty"`
 	// user-defined IPv6 address in the management network
 	MgmtIPv6 string `yaml:"mgmt-ipv6,omitempty"`
-	// list of ports to publish with mysocketctl
-	Publish []string `yaml:"publish,omitempty"`
 	// environment variables
 	Env map[string]string `yaml:"env,omitempty"`
 	// external file containing environment variables
@@ -67,12 +71,16 @@ type NodeDefinition struct {
 	Sysctls map[string]string `yaml:"sysctls,omitempty"`
 	// Extra options, may be kind specific
 	Extras *Extras `yaml:"extras,omitempty"`
-	// List of node names to wait for before satarting this particular node
-	WaitFor []string `yaml:"wait-for,omitempty"`
+	// Deployment stages
+	Stages *Stages `yaml:"stages,omitempty"`
 	// DNS configuration
 	DNS *DNSConfig `yaml:"dns,omitempty"`
-	// Certificate Configuration
+	// Certificate configuration
 	Certificate *CertificateConfig `yaml:"certificate,omitempty"`
+	// Healthcheck configuration
+	HealthCheck *HealthcheckConfig `yaml:"healthcheck,omitempty"`
+	// Network aliases
+	Aliases []string `yaml:"aliases,omitempty"`
 }
 
 // Interface compliance.
@@ -147,11 +155,18 @@ func (n *NodeDefinition) GetStartupDelay() uint {
 	return n.StartupDelay
 }
 
-func (n *NodeDefinition) GetEnforceStartupConfig() bool {
+func (n *NodeDefinition) GetEnforceStartupConfig() *bool {
 	if n == nil {
-		return false
+		return nil
 	}
 	return n.EnforceStartupConfig
+}
+
+func (n *NodeDefinition) GetSuppressStartupConfig() *bool {
+	if n == nil {
+		return nil
+	}
+	return n.SuppressStartupConfig
 }
 
 func (n *NodeDefinition) GetAutoRemove() *bool {
@@ -159,6 +174,13 @@ func (n *NodeDefinition) GetAutoRemove() *bool {
 		return nil
 	}
 	return n.AutoRemove
+}
+
+func (n *NodeDefinition) GetRestartPolicy() string {
+	if n == nil {
+		return ""
+	}
+	return n.RestartPolicy
 }
 
 func (n *NodeDefinition) GetConfigDispatcher() *ConfigDispatcher {
@@ -217,6 +239,27 @@ func (n *NodeDefinition) GetBinds() []string {
 	return n.Binds
 }
 
+func (n *NodeDefinition) GetDevices() []string {
+	if n == nil {
+		return nil
+	}
+	return n.Devices
+}
+
+func (n *NodeDefinition) GetCapAdd() []string {
+	if n == nil {
+		return nil
+	}
+	return n.CapAdd
+}
+
+func (n *NodeDefinition) GetNodeShmSize() string {
+	if n == nil {
+		return ""
+	}
+	return n.ShmSize
+}
+
 func (n *NodeDefinition) GetPorts() []string {
 	if n == nil {
 		return nil
@@ -236,13 +279,6 @@ func (n *NodeDefinition) GetMgmtIPv6() string {
 		return ""
 	}
 	return n.MgmtIPv6
-}
-
-func (n *NodeDefinition) GetPublish() []string {
-	if n == nil {
-		return nil
-	}
-	return n.Publish
 }
 
 func (n *NodeDefinition) GetEnv() map[string]string {
@@ -344,18 +380,11 @@ func (n *NodeDefinition) GetExtras() *Extras {
 	return n.Extras
 }
 
-func (n *NodeDefinition) GetSANs() []string {
+func (n *NodeDefinition) GetStages() *Stages {
 	if n == nil {
 		return nil
 	}
-	return n.SANs
-}
-
-func (n *NodeDefinition) GetWaitFor() []string {
-	if n == nil {
-		return []string{}
-	}
-	return n.WaitFor
+	return n.Stages
 }
 
 func (n *NodeDefinition) GetDns() *DNSConfig {
@@ -370,6 +399,20 @@ func (n *NodeDefinition) GetCertificateConfig() *CertificateConfig {
 		return nil
 	}
 	return n.Certificate
+}
+
+func (n *NodeDefinition) GetHealthcheckConfig() *HealthcheckConfig {
+	if n == nil {
+		return nil
+	}
+	return n.HealthCheck
+}
+
+func (n *NodeDefinition) GetAliases() []string {
+	if n == nil {
+		return nil
+	}
+	return n.Aliases
 }
 
 // ImportEnvs imports all environment variales defined in the shell

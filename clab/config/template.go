@@ -1,18 +1,19 @@
 package config
 
 import (
-	"context"
+	"embed"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
 
-	"github.com/hairyhenderson/gomplate/v3"
-	"github.com/hairyhenderson/gomplate/v3/data"
 	jT "github.com/kellerza/template"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/srl-labs/containerlab/types"
+	"github.com/srl-labs/containerlab/utils"
 	"gopkg.in/yaml.v2"
 )
 
@@ -51,31 +52,34 @@ func LoadTemplates(tmpl *template.Template, role string) error {
 	return nil
 }
 
+//go:embed templates
+var embeddedTemplates embed.FS
+
 func RenderAll(allnodes map[string]*NodeConfig) error {
 	if len(TemplatePaths) == 0 { // default is the install path
 		TemplatePaths = []string{"@"}
 	}
 
-	for i, v := range TemplatePaths {
+	var TemplateFS []fs.FS
+
+	for _, v := range TemplatePaths {
 		if v == "@" {
-			TemplatePaths[i] = "/etc/containerlab/templates/"
+			TemplateFS = append(TemplateFS, embeddedTemplates)
+		} else {
+			TemplateFS = append(TemplateFS, os.DirFS(v))
 		}
 	}
 
 	if len(TemplateNames) == 0 {
 		var err error
-		TemplateNames, err = GetTemplateNamesInDirs(TemplatePaths)
+		TemplateNames, err = GetTemplateNamesInDirs(TemplateFS)
 		if err != nil {
 			return err
 		}
 		log.Infof("No template names specified (-l) using: %s", strings.Join(TemplateNames, ", "))
 	}
 
-	// gomplate overrides the built-in *slice* function. You can still use *coll.Slice*
-	gfuncs := gomplate.CreateFuncs(context.Background(), new(data.Data))
-	delete(gfuncs, "slice")
-
-	tmpl := template.New("").Funcs(gfuncs).Funcs(jT.Funcs)
+	tmpl := template.New("").Funcs(utils.CreateFuncs()).Funcs(jT.Funcs)
 
 	for _, nc := range allnodes {
 		for _, baseN := range TemplateNames {
@@ -162,5 +166,5 @@ func (c *NodeConfig) Print(vars, rendered bool) { // skipcq: RVV-A0005
 		}
 	}
 
-	log.Infoln(s.String())
+	log.Info(s.String())
 }

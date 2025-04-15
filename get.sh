@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # The install script is based off of the Apache 2.0 script from Helm,
 # https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3
 
@@ -10,6 +12,7 @@
 : ${REPO_NAME:="srl-labs/containerlab"}
 : ${REPO_URL:="https://github.com/$REPO_NAME"}
 : ${PROJECT_URL:="https://containerlab.dev"}
+: ${LATEST_VERSION_URL:="${REPO_URL}/releases/latest"}
 
 # detectArch discovers the architecture for this system.
 detectArch() {
@@ -47,6 +50,9 @@ detectOS() {
             PKG_FORMAT="rpm"
         ;;
 
+        alpine)
+            PKG_FORMAT="apk"
+        ;;
         *)
             if type "rpm" &>/dev/null; then
                 PKG_FORMAT="rpm"
@@ -92,40 +98,67 @@ verifyOpenssl() {
         fi
     fi
 }
+# Handle version retrieval error
+handleVersionError() {
+    echo "Failed to retrieve latest containerlab version"
+    exit 1
+}
+
+# Process version into tags
+processVersion() {
+    local version=$1
+    [ -z "$version" ] && handleVersionError
+    TAG_WO_VER=$(echo "${version}" | cut -c 2-)
+    TAG="${version}"
+}
 
 # setDesiredVersion sets the desired version either to an explicit version provided by a user
 # or to the latest release available on github releases
 setDesiredVersion() {
     if [ "x$DESIRED_VERSION" == "x" ]; then
         # when desired version is not provided
-        # get latest tag from the gh releases
+        # get latest tag from the <repo>/internal/versions.yml
         if type "curl" &>/dev/null; then
-            local latest_release_url=$(curl -s https://api.github.com/repos/$REPO_NAME/releases/latest | sed '5q;d' | cut -d '"' -f 4)
-            TAG=$(echo $latest_release_url | cut -d '"' -f 2 | awk -F "/" '{print $NF}')
-            # tag with stripped `v` prefix
-            TAG_WO_VER=$(echo "${TAG}" | cut -c 2-)
+            local latest_version=$(curl -s -I ${LATEST_VERSION_URL} | grep -i "location:" | awk -F'/' '{print $NF}' | tr -cd '[:alnum:].-')
+            processVersion "$latest_version"
         elif type "wget" &>/dev/null; then
-            # get latest release info and get 5th line out of the response to get the URL
-            local latest_release_url=$(wget -q https://api.github.com/repos/$REPO_NAME/releases/latest -O- | sed '5q;d' | cut -d '"' -f 4)
-            TAG=$(echo $latest_release_url | cut -d '"' -f 2 | awk -F "/" '{print $NF}')
-            TAG_WO_VER=$(echo "${TAG}" | cut -c 2-)
+            local latest_version=$(wget -qO- -S --spider ${LATEST_VERSION_URL} 2>&1 | grep -i "location:" | awk -F'/' '{print $NF}' | tr -cd '[:alnum:].-')
+            processVersion "$latest_version"
         fi
     else
         TAG=$DESIRED_VERSION
         TAG_WO_VER=$(echo "${TAG}" | cut -c 2-)
 
         if type "curl" &>/dev/null; then
-            if ! curl -s -o /dev/null --fail https://api.github.com/repos/$REPO_NAME/releases/tags/$DESIRED_VERSION; then
+            if ! curl -s -o /dev/null --fail https://github.com/srl-labs/containerlab/releases/tag/$DESIRED_VERSION; then
                 echo "release $DESIRED_VERSION not found"
                 exit 1
             fi
         elif type "wget" &>/dev/null; then
-            if ! wget -q https://api.github.com/repos/$REPO_NAME/releases/tags/$DESIRED_VERSION; then
+            if ! wget -q https://github.com/srl-labs/containerlab/releases/tag/$DESIRED_VERSION; then
                 echo "release $DESIRED_VERSION not found"
                 exit 1
             fi
         fi
     fi
+}
+
+# docsLinkFromVer returns the url portion for release notes
+# based on the Go docsLinkFromVer() function in version.go
+docsLinkFromVer() {
+  ver=$1
+  IFS='.' read -ra segments <<< "$ver"
+  maj=${segments[0]}
+  min=${segments[1]}
+  patch=${segments[2]}
+
+  relSlug="$maj.$min/"
+  if [ -n "$patch" ]; then
+    if [ "$patch" -ne 0 ]; then
+      relSlug="$relSlug#$maj$min$patch"
+    fi
+  fi
+  echo "$relSlug"
 }
 
 # checkInstalledVersion checks which version is installed and
@@ -138,10 +171,11 @@ checkInstalledVersion() {
             return 0
         else
             if [ "$(printf '%s\n' "$TAG_WO_VER" "$version" | sort -V | head -n1)" = "$TAG_WO_VER" ]; then
+                RN_VER=$(docsLinkFromVer $TAG_WO_VER)
                 echo "A newer ${BINARY_NAME} version $version is already installed"
                 echo "You are running ${BINARY_NAME} version $version"
                 echo "You are trying to downgrade to ${BINARY_NAME} version ${TAG_WO_VER}"
-                echo "Release notes: https://containerlab.dev/rn/${TAG_WO_VER}"
+                echo "Release notes: https://containerlab.dev/rn/${RN_VER}"
                 UPGR_NEEDED="Y"
                 # check if stdin is open (i.e. capable of getting users input)
                 if [ -t 0 ]; then
@@ -152,7 +186,8 @@ checkInstalledVersion() {
                 fi
                 return 0
             else
-                echo "A newer ${BINARY_NAME} ${TAG_WO_VER} is available. Release notes: https://containerlab.dev/rn/${TAG_WO_VER}"
+                RN_VER=$(docsLinkFromVer $TAG_WO_VER)
+                echo "A newer ${BINARY_NAME} ${TAG_WO_VER} is available. Release notes: https://containerlab.dev/rn/${RN_VER}"
                 echo "You are running containerlab $version version"
                 UPGR_NEEDED="Y"
                 # check if stdin is open (i.e. capable of getting users input)
@@ -187,7 +222,7 @@ downloadFile() {
     CHECKSUM_URL="${REPO_URL}/releases/download/${TAG}/checksums.txt"
     TMP_FILE="$TMP_ROOT/$ARCHIVE"
     SUM_FILE="$TMP_ROOT/checksums.txt"
-    echo "Downloading $DOWNLOAD_URL"
+    echo "Downloading ${DOWNLOAD_URL}"
     if type "curl" &>/dev/null; then
         curl -SsL "$CHECKSUM_URL" -o "$SUM_FILE"
         curl -SsL "$DOWNLOAD_URL" -o "$TMP_FILE"
@@ -213,7 +248,15 @@ downloadFile() {
 installFile() {
     tar xf "$TMP_FILE" -C "$TMP_ROOT"
     echo "Preparing to install $BINARY_NAME ${TAG_WO_VER} into ${BIN_INSTALL_DIR}"
-    runAsRoot cp "$TMP_ROOT/$BINARY_NAME" "$BIN_INSTALL_DIR/$BINARY_NAME"
+    # If SUID setup is running for the first time
+    if [ ! -f /etc/containerlab/suid_setup_done ]; then
+        # Set SUID bit on the containerlab binary
+        runAsRoot install -m 4755 "$TMP_ROOT/$BINARY_NAME" "$BIN_INSTALL_DIR/$BINARY_NAME"
+        # Add clab admins group and add current user to it
+        runAsRoot groupadd -r clab_admins
+        runAsRoot usermod -aG clab_admins "$SUDO_USER"
+        runAsRoot touch /etc/containerlab/suid_setup_done
+    fi
     echo "$BINARY_NAME installed into $BIN_INSTALL_DIR/$BINARY_NAME"
 }
 
@@ -227,6 +270,8 @@ installPkg() {
 setPkgInstaller() {
     if [ $PKG_FORMAT == "deb" ]; then
         PKG_INSTALLER="dpkg -i"
+    elif [ $PKG_FORMAT == "apk" ]; then
+        PKG_INSTALLER="apk add --allow-untrusted"
     elif [ $PKG_FORMAT == "rpm" ]; then
         if [ -f /etc/os-release ]; then
             VARIANT_ID="$(. /etc/os-release && echo "$VARIANT_ID")"
@@ -285,7 +330,7 @@ help() {
     echo -e "\t[--verify-checksum]  ->> verify checksum of the downloaded file"
 }
 
-# removes temporary directory used to download artefacts
+# removes temporary directory used to download artifacts
 cleanup() {
     if [[ -d "${TMP_ROOT:-}" ]]; then
         rm -rf "$TMP_ROOT"

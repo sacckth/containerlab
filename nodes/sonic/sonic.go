@@ -8,20 +8,34 @@ import (
 	"context"
 	"fmt"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/srl-labs/containerlab/clab/exec"
 	"github.com/srl-labs/containerlab/nodes"
 	"github.com/srl-labs/containerlab/types"
 	"github.com/srl-labs/containerlab/utils"
 )
 
-var kindnames = []string{"sonic-vs"}
+const (
+	generateable     = true
+	generateIfFormat = "eth%d"
+
+	scrapliPlatformName = "sonic"
+)
+
+var kindNames = []string{"sonic-vs"}
 
 // Register registers the node in the NodeRegistry.
 func Register(r *nodes.NodeRegistry) {
-	r.Register(kindnames, func() nodes.Node {
+	generateNodeAttributes := nodes.NewGenerateNodeAttributes(generateable, generateIfFormat)
+	platformAttrs := &nodes.PlatformAttrs{
+		ScrapliPlatformName: scrapliPlatformName,
+	}
+
+	nrea := nodes.NewNodeRegistryEntryAttributes(nil, generateNodeAttributes, platformAttrs)
+
+	r.Register(kindNames, func() nodes.Node {
 		return new(sonic)
-	}, nil)
+	}, nrea)
 }
 
 type sonic struct {

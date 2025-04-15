@@ -5,22 +5,26 @@
 package nodes
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
-	"text/template"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
 
-	"github.com/hairyhenderson/gomplate/v3"
-	"github.com/hairyhenderson/gomplate/v3/data"
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
+	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/srl-labs/containerlab/cert"
 	"github.com/srl-labs/containerlab/clab/exec"
+	"github.com/srl-labs/containerlab/links"
+	"github.com/srl-labs/containerlab/nodes/state"
 	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/types"
 	"github.com/srl-labs/containerlab/utils"
+	"github.com/vishvananda/netlink"
 )
 
 // DefaultNode implements the Node interface and is embedded to the structs of all other nodes.
@@ -30,11 +34,24 @@ type DefaultNode struct {
 	Mgmt             *types.MgmtNet
 	Runtime          runtime.ContainerRuntime
 	HostRequirements *types.HostRequirements
+	// SSHConfig is the SSH client configuration that a clab node requires.
+	SSHConfig *types.SSHConfig
 	// Indicates that the node should not start without no license file defined
 	LicensePolicy types.LicensePolicy
 	// OverwriteNode stores the interface used to overwrite methods defined
 	// for DefaultNode, so that particular nodes can provide custom implementations.
 	OverwriteNode NodeOverwrites
+	// List of link endpoints that are connected to the node.
+	Endpoints []links.Endpoint
+	// Interface aliasing-related variables
+	InterfaceRegexp       *regexp.Regexp
+	InterfaceMappedPrefix string
+	InterfaceOffset       int
+	InterfaceHelp         string
+	FirstDataIfIndex      int
+	// State of the node
+	state      state.NodeState
+	statemutex sync.RWMutex
 }
 
 // NewDefaultNode initializes the DefaultNode structure and receives a NodeOverwrites interface
@@ -45,7 +62,12 @@ func NewDefaultNode(n NodeOverwrites) *DefaultNode {
 		HostRequirements: types.NewHostRequirements(),
 		OverwriteNode:    n,
 		LicensePolicy:    types.LicensePolicyNone,
+		SSHConfig:        types.NewSSHConfig(),
 	}
+
+	dn.InterfaceMappedPrefix = "eth"
+	dn.InterfaceOffset = 0
+	dn.FirstDataIfIndex = 0
 
 	return dn
 }
@@ -79,22 +101,27 @@ func (d *DefaultNode) CheckDeploymentConditions(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	err = d.OverwriteNode.VerifyStartupConfig(d.Cfg.LabDir)
 	if err != nil {
 		return err
 	}
+
 	err = d.OverwriteNode.CheckInterfaceName()
 	if err != nil {
 		return err
 	}
+
 	err = d.OverwriteNode.VerifyLicenseFileExists(ctx)
 	if err != nil {
 		return err
 	}
+
 	err = d.OverwriteNode.PullImage(ctx)
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -116,15 +143,59 @@ func (d *DefaultNode) VerifyHostRequirements() error {
 }
 
 func (d *DefaultNode) Deploy(ctx context.Context, _ *DeployParams) error {
+	// Set the "CLAB_INTFS" variable to the number of interfaces
+	// Which is required by vrnetlab to determine if all configured interfaces are present
+	// such that the internal VM can be started with these interfaces assigned.
+	d.Config().Env[types.CLAB_ENV_INTFS] = strconv.Itoa(len(d.GetEndpoints()))
+
+	// create the container
 	cID, err := d.Runtime.CreateContainer(ctx, d.Cfg)
 	if err != nil {
 		return err
 	}
-	_, err = d.Runtime.StartContainer(ctx, cID, d.Cfg)
-	return err
+
+	// start the container
+	_, err = d.Runtime.StartContainer(ctx, cID, d)
+	if err != nil {
+		return err
+	}
+
+	// Update the nodes state
+	d.SetState(state.Deployed)
+
+	return nil
+}
+
+// getNSPath retrieves the nodes nspath.
+func (d *DefaultNode) getNSPath(ctx context.Context) (string, error) {
+	var err error
+	nsp := ""
+
+	if d.Cfg.IsRootNamespaceBased {
+		netns, err := ns.GetCurrentNS()
+		if err != nil {
+			return "", err
+		}
+		nsp = netns.Path()
+	}
+	if nsp == "" {
+		nsp, err = d.Runtime.GetNSPath(ctx, d.Cfg.LongName)
+		if err != nil {
+			log.Errorf("Unable to determine NetNS Path for node %s: %v", d.Cfg.ShortName, err)
+			return "", err
+		}
+	}
+
+	return nsp, err
 }
 
 func (d *DefaultNode) Delete(ctx context.Context) error {
+	for _, e := range d.Endpoints {
+		err := e.GetLink().Remove(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	return d.Runtime.DeleteContainer(ctx, d.OverwriteNode.GetContainerName())
 }
 
@@ -138,7 +209,7 @@ func (d *DefaultNode) GetContainers(ctx context.Context) ([]runtime.GenericConta
 	cnts, err := d.Runtime.ListContainers(ctx, []*types.GenericFilter{
 		{
 			FilterType: "name",
-			Match:      fmt.Sprintf("^%s$", d.OverwriteNode.GetContainerName()), // this regexp ensure we have an exact match for name
+			Match:      d.OverwriteNode.GetContainerName(),
 		},
 	})
 	if err != nil {
@@ -151,6 +222,24 @@ func (d *DefaultNode) GetContainers(ctx context.Context) ([]runtime.GenericConta
 	}
 
 	return cnts, err
+}
+
+func (d *DefaultNode) RunExecFromConfig(ctx context.Context, ec *exec.ExecCollection) error {
+	for _, e := range d.Config().Exec {
+		exec, err := exec.NewExecCmdFromString(e)
+		if err != nil {
+			log.Warnf("Failed to parse the command string: %s, %v", e, err)
+		}
+
+		res, err := d.OverwriteNode.RunExec(ctx, exec)
+		if err != nil {
+			// kinds which do not support exec functionality are skipped
+			continue
+		}
+
+		ec.Add(d.GetShortName(), res)
+	}
+	return nil
 }
 
 func (d *DefaultNode) UpdateConfigWithRuntimeInfo(ctx context.Context) error {
@@ -186,10 +275,60 @@ func (d *DefaultNode) DeleteNetnsSymlink() error {
 	return utils.DeleteNetnsSymlink(d.OverwriteNode.GetContainerName())
 }
 
+func (d *DefaultNode) CheckInterfaceOverlap() error {
+	var seenEps []links.Endpoint
+
+	for _, ep := range d.Endpoints {
+		ifName := ep.GetIfaceName()
+		for _, seenEp := range seenEps {
+			if ifName == seenEp.GetIfaceName() {
+				return fmt.Errorf("%q and %q have overlapping interface names", ep, seenEp)
+			}
+		}
+		seenEps = append(seenEps, ep)
+	}
+
+	return nil
+}
+
 // CheckInterfaceName checks if a name of the interface referenced in the topology file is in the expected range of name values.
 // A no-op for the default node, specific nodes should implement this method.
-func (*DefaultNode) CheckInterfaceName() error {
-	return nil
+func (d *DefaultNode) CheckInterfaceName() error {
+	return d.CheckInterfaceOverlap()
+}
+
+// CalculateInterfaceIndex parses the supplied interface name with the InterfaceRegexp.
+// Using the the port offset, it calculates the mapped interface index based on the InterfaceOffset and the first data interface index.
+func (d *DefaultNode) CalculateInterfaceIndex(ifName string) (int, error) {
+	captureGroups, err := utils.GetRegexpCaptureGroups(d.InterfaceRegexp, ifName)
+	if err != nil {
+		return 0, err
+	}
+
+	if parsedIndex, found := captureGroups["port"]; found {
+		parsedIndexInt, err := strconv.Atoi(parsedIndex)
+		if err != nil {
+			return 0, fmt.Errorf("%q parsed index %q could not be cast to an integer", ifName, parsedIndex)
+		}
+		calculatedIndex := parsedIndexInt - d.InterfaceOffset + d.FirstDataIfIndex
+		return calculatedIndex, nil
+	} else {
+		return 0, fmt.Errorf("%q does not have extracted interface index with regexp %q, 'port' capture group missing?", ifName, d.InterfaceRegexp)
+	}
+}
+
+// GetMappedInterfaceName returns with a mapped interface name based on the mapped interface prefix and calculated mapped interface index.
+func (d *DefaultNode) GetMappedInterfaceName(ifName string) (string, error) {
+	ifIndex, err := d.OverwriteNode.CalculateInterfaceIndex(ifName)
+	if err != nil {
+		return "", err
+	}
+	if !(ifIndex >= d.FirstDataIfIndex) {
+		return "", fmt.Errorf("extracted interface index for %q is out of bounds: %d ! >= %d", ifName, ifIndex, d.FirstDataIfIndex)
+	}
+	mappedIfName := fmt.Sprintf("%s%d", d.InterfaceMappedPrefix, ifIndex)
+
+	return mappedIfName, nil
 }
 
 // VerifyStartupConfig verifies that startup config files exists on disks.
@@ -209,42 +348,36 @@ func (d *DefaultNode) VerifyStartupConfig(topoDir string) error {
 }
 
 // GenerateConfig generates configuration for the nodes
-// out of the template based on the node configuration and saves the result to dst.
-func (d *DefaultNode) GenerateConfig(dst, templ string) error {
+// out of the template `t` based on the node configuration and saves the result to dst.
+func (d *DefaultNode) GenerateConfig(dst, t string) error {
 	// If the config file is already present in the node dir
 	// we do not regenerate the config unless EnforceStartupConfig is explicitly set to true and startup-config points to a file
 	// this will persist the changes that users make to a running config when booted from some startup config
-	if utils.FileExists(dst) && (d.Cfg.StartupConfig == "" || !d.Cfg.EnforceStartupConfig) {
-		log.Infof("config file '%s' for node '%s' already exists and will not be generated/reset", dst, d.Cfg.ShortName)
+	if d.Cfg.SuppressStartupConfig {
+		log.Infof("Startup config generation for '%s' node suppressed", d.Cfg.ShortName)
 		return nil
 	} else if d.Cfg.EnforceStartupConfig {
 		log.Infof("Startup config for '%s' node enforced: '%s'", d.Cfg.ShortName, dst)
+		// continue with config generation
+	} else if utils.FileExists(dst) && d.Cfg.StartupConfig == "" {
+		log.Infof("config file '%s' for node '%s' already exists and will not be generated/reset", dst, d.Cfg.ShortName)
+		return nil
 	}
 
-	log.Debugf("generating config for node %s from file %s", d.Cfg.ShortName, d.Cfg.StartupConfig)
+	log.Debug("Generating config", "node", d.Cfg.ShortName, "file", d.Cfg.StartupConfig)
 
-	// gomplate overrides the built-in *slice* function. You can still use *coll.Slice*
-	gfuncs := gomplate.CreateFuncs(context.Background(), new(data.Data))
-	delete(gfuncs, "slice")
-	tpl, err := template.New(filepath.Base(d.Cfg.StartupConfig)).Funcs(gfuncs).Parse(templ)
+	cfgBuf, err := utils.SubstituteEnvsAndTemplate(strings.NewReader(t), d.Cfg)
 	if err != nil {
 		return err
 	}
-
-	dstBytes := new(bytes.Buffer)
-
-	err = tpl.Execute(dstBytes, d.Cfg)
-	if err != nil {
-		return err
-	}
-	log.Debugf("node '%s' generated config: %s", d.Cfg.ShortName, dstBytes.String())
+	log.Debugf("node '%s' generated config: %s", d.Cfg.ShortName, cfgBuf.String())
 
 	f, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
 
-	_, err = f.Write(dstBytes.Bytes())
+	_, err = f.Write(cfgBuf.Bytes())
 	if err != nil {
 		f.Close()
 		return err
@@ -253,7 +386,7 @@ func (d *DefaultNode) GenerateConfig(dst, templ string) error {
 	return f.Close()
 }
 
-// NodeOverwrites is an interface that every node implementation implements.
+// NodeOverwrites is an interface that every node implements.
 // It is used to enable DefaultNode to get access to the particular node structs
 // and is provided as an argument of the NewDefaultNode function.
 // The methods defined for this interfaces are the methods that particular node has a custom
@@ -261,12 +394,15 @@ func (d *DefaultNode) GenerateConfig(dst, templ string) error {
 type NodeOverwrites interface {
 	VerifyStartupConfig(topoDir string) error
 	CheckInterfaceName() error
+	CalculateInterfaceIndex(ifName string) (int, error)
+	GetMappedInterfaceName(ifName string) (string, error)
 	VerifyHostRequirements() error
 	PullImage(ctx context.Context) error
 	GetImages(ctx context.Context) map[string]string
 	GetContainers(ctx context.Context) ([]runtime.GenericContainer, error)
 	GetContainerName() string
 	VerifyLicenseFileExists(context.Context) error
+	RunExec(context.Context, *exec.ExecCmd) (*exec.ExecResult, error)
 }
 
 // LoadStartupConfigFileVr templates a startup-config using the file specified for VM-based nodes in the topo
@@ -346,8 +482,9 @@ func (d *DefaultNode) VerifyLicenseFileExists(_ context.Context) error {
 	// if license is provided check path exists
 	rlic := utils.ResolvePath(d.Config().License, d.Cfg.LabDir)
 	if !utils.FileExists(rlic) {
-		return fmt.Errorf("license file of node %q not found by the path %s", d.Config().ShortName, rlic)
+		return fmt.Errorf("license file for node %q is not found by the path %s", d.Config().ShortName, rlic)
 	}
+
 	return nil
 }
 
@@ -355,7 +492,7 @@ func (d *DefaultNode) VerifyLicenseFileExists(_ context.Context) error {
 // provided in certInfra or generates a new one if it does not exist.
 func (d *DefaultNode) LoadOrGenerateCertificate(certInfra *cert.Cert, topoName string) (nodeCert *cert.Certificate, err error) {
 	// early return if certificate generation is not required
-	if d.Cfg.Certificate == nil || !d.Cfg.Certificate.Issue {
+	if d.Cfg.Certificate == nil || !*d.Cfg.Certificate.Issue {
 		return nil, nil
 	}
 
@@ -371,13 +508,23 @@ func (d *DefaultNode) LoadOrGenerateCertificate(certInfra *cert.Cert, topoName s
 			nodeConfig.LongName,
 			nodeConfig.ShortName + "." + topoName + ".io",
 		}
-		hosts = append(hosts, nodeConfig.SANs...)
+		// add the SANs provided via config
+		hosts = append(hosts, nodeConfig.Certificate.SANs...)
 
-		// collect cert details
+		// add mgmt IPs as SANs to CSR
+		for _, ip := range []string{d.Cfg.MgmtIPv4Address, d.Cfg.MgmtIPv6Address} {
+			if ip != "" {
+				hosts = append(hosts, ip)
+			}
+		}
+
 		certInput := &cert.NodeCSRInput{
 			CommonName:   nodeConfig.ShortName + "." + topoName + ".io",
 			Hosts:        hosts,
 			Organization: "containerlab",
+			Country:      "US",
+			KeySize:      d.Cfg.Certificate.KeySize,
+			Expiry:       d.Cfg.Certificate.ValidityDuration,
 		}
 		// Generate the cert for the node
 		nodeCert, err = certInfra.GenerateAndSignNodeCert(certInput)
@@ -393,4 +540,124 @@ func (d *DefaultNode) LoadOrGenerateCertificate(certInfra *cert.Cert, topoName s
 	}
 
 	return nodeCert, nil
+}
+
+func (d *DefaultNode) AddLinkToContainer(ctx context.Context, link netlink.Link, f func(ns.NetNS) error) error {
+	// retrieve nodes nspath
+	nsp, err := d.getNSPath(ctx)
+	if err != nil {
+		return err
+	}
+	// retrieve the namespace handle
+	netns, err := ns.GetNS(nsp)
+	if err != nil {
+		return err
+	}
+	// move veth endpoint to namespace
+	if err = netlink.LinkSetNsFd(link, int(netns.Fd())); err != nil {
+		return err
+	}
+	// execute the given function
+	err = netns.Do(f)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// ExecFunction executes the given function in the nodes network namespace.
+func (d *DefaultNode) ExecFunction(ctx context.Context, f func(ns.NetNS) error) error {
+	// retrieve nodes nspath
+	nspath, err := d.getNSPath(ctx)
+	if err != nil {
+		return err
+	}
+
+	if d.Cfg.IsRootNamespaceBased {
+		nshandle, err := ns.GetCurrentNS()
+		if err != nil {
+			return err
+		}
+		nspath = nshandle.Path()
+	}
+
+	if nspath == "" {
+		return fmt.Errorf("nspath is not set for node %q", d.GetShortName())
+	}
+
+	// retrieve the namespace handle
+	netns, err := ns.GetNS(nspath)
+	if err != nil {
+		return err
+	}
+	// execute the given function
+	return netns.Do(f)
+}
+
+// AddEndpoint maps the endpoint name to before adding it to the node endpoints if it matches the interface alias regexp. Returns an error if the mapping goes wrong.
+func (d *DefaultNode) AddEndpoint(e links.Endpoint) error {
+	endpointName := e.GetIfaceName()
+	if d.InterfaceRegexp != nil && d.InterfaceRegexp.MatchString(endpointName) {
+		mappedName, err := d.OverwriteNode.GetMappedInterfaceName(endpointName)
+		if err != nil {
+			return fmt.Errorf("%q interface name %q could not be mapped: %w", d.Cfg.ShortName, e.GetIfaceName(), err)
+		}
+		log.Debugf("Interface Mapping: Mapping interface %q (ifAlias) to %q (ifName)", endpointName, mappedName)
+		e.SetIfaceName(mappedName)
+		e.SetIfaceAlias(endpointName)
+	}
+	d.Endpoints = append(d.Endpoints, e)
+
+	return nil
+}
+
+func (d *DefaultNode) GetEndpoints() []links.Endpoint {
+	return d.Endpoints
+}
+
+// GetLinkEndpointType returns a veth link endpoint type for default nodes.
+// The LinkEndpointTypeVeth indicates a veth endpoint which doesn't require special handling.
+func (*DefaultNode) GetLinkEndpointType() links.LinkEndpointType {
+	return links.LinkEndpointTypeVeth
+}
+
+func (d *DefaultNode) GetShortName() string {
+	return d.Cfg.ShortName
+}
+
+// DeployEndpoints deploys endpoints associated with the node.
+// The deployment of endpoints is done by deploying a link with the endpoint triggering it.
+func (d *DefaultNode) DeployEndpoints(ctx context.Context) error {
+	for _, ep := range d.Endpoints {
+		err := ep.Deploy(ctx)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (d *DefaultNode) GetState() state.NodeState {
+	d.statemutex.RLock()
+	defer d.statemutex.RUnlock()
+	return d.state
+}
+
+func (d *DefaultNode) SetState(s state.NodeState) {
+	d.statemutex.Lock()
+	defer d.statemutex.Unlock()
+	d.state = s
+}
+
+func (d *DefaultNode) GetSSHConfig() *types.SSHConfig {
+	return d.SSHConfig
+}
+
+func (d *DefaultNode) GetContainerStatus(ctx context.Context) runtime.ContainerStatus {
+	return d.Runtime.GetContainerStatus(ctx, d.GetContainerName())
+}
+
+func (d *DefaultNode) IsHealthy(ctx context.Context) (bool, error) {
+	return d.Runtime.IsHealthy(ctx, d.GetContainerName())
 }

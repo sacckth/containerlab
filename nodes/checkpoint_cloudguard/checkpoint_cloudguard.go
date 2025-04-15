@@ -20,9 +20,10 @@ var (
 
 // Register registers the node in the NodeRegistry.
 func Register(r *nodes.NodeRegistry) {
+	nrea := nodes.NewNodeRegistryEntryAttributes(defaultCredentials, nil, nil)
 	r.Register(kindnames, func() nodes.Node {
 		return new(CheckpointCloudguard)
-	}, defaultCredentials)
+	}, nrea)
 }
 
 type CheckpointCloudguard struct {
@@ -66,5 +67,5 @@ func (n *CheckpointCloudguard) PreDeploy(_ context.Context, params *nodes.PreDep
 
 // CheckInterfaceName checks if a name of the interface referenced in the topology file correct.
 func (n *CheckpointCloudguard) CheckInterfaceName() error {
-	return nodes.GenericVMInterfaceCheck(n.Cfg.ShortName, n.Cfg.Endpoints)
+	return nodes.GenericVMInterfaceCheck(n.Cfg.ShortName, n.Endpoints)
 }

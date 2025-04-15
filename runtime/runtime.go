@@ -9,8 +9,9 @@ import (
 	"fmt"
 	"time"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/srl-labs/containerlab/clab/exec"
+	"github.com/srl-labs/containerlab/links"
 	"github.com/srl-labs/containerlab/types"
 )
 
@@ -35,7 +36,7 @@ type ContainerRuntime interface {
 	CreateContainer(context.Context, *types.NodeConfig) (string, error)
 	// Start pre-created container by its name. Returns an extra interface that can be used to receive signals
 	// about the container life-cycle after it was created, e.g. for post-deploy tasks
-	StartContainer(context.Context, string, *types.NodeConfig) (interface{}, error)
+	StartContainer(context.Context, string, Node) (interface{}, error)
 	// Stop running container by its name
 	StopContainer(context.Context, string) error
 	// Pause a container identified by its name
@@ -44,7 +45,7 @@ type ContainerRuntime interface {
 	UnpauseContainer(context.Context, string) error
 	// List all containers matching labels
 	ListContainers(context.Context, []*types.GenericFilter) ([]GenericContainer, error)
-	// Get a netns path using the pid of a container
+	// Get a netns path using the name of a container
 	GetNSPath(context.Context, string) (string, error)
 	// Executes cmd on container identified with id and returns stdout, stderr bytes and an error
 	Exec(ctx context.Context, cID string, execCmd *exec.ExecCmd) (*exec.ExecResult, error)
@@ -59,6 +60,12 @@ type ContainerRuntime interface {
 	GetHostsPath(context.Context, string) (string, error)
 	// GetContainerStatus retrieves the ContainerStatus of the named container
 	GetContainerStatus(ctx context.Context, cID string) ContainerStatus
+	// IsHealthy returns true is the container is reported as being healthy, false otherwise
+	IsHealthy(ctx context.Context, cID string) (bool, error)
+	// Immediately write to the stdin of a container, returns error
+	WriteToStdinNoWait(ctx context.Context, cID string, data []byte) error
+	// CheckConnectivity returns an error if it cannot connect to the runtime, nil otherwise
+	CheckConnection(ctx context.Context) error
 }
 
 type ContainerStatus string
@@ -78,6 +85,7 @@ type RuntimeConfig struct {
 	GracefulShutdown bool
 	Debug            bool
 	KeepMgmtNet      bool
+	VerifyLinkParams *links.VerifyLinkParams
 }
 
 var ContainerRuntimes = map[string]Initializer{}
@@ -98,18 +106,12 @@ func WithMgmtNet(mgmt *types.MgmtNet) RuntimeOption {
 	}
 }
 
-func WithKeepMgmtNet() RuntimeOption {
-	return func(r ContainerRuntime) {
-		r.WithKeepMgmtNet()
-	}
-}
-
 // WaitForContainerRunning waits for container to become running by polling its status.
 func WaitForContainerRunning(ctx context.Context, r ContainerRuntime, contName, nodeName string) error {
 	// how long to wait for the external container to become running
 	statusCheckTimeout := 15 * time.Minute
 	// frequency to check for new container state
-	statusCheckFrequency := time.Second
+	statusCheckFrequency := 3 * time.Second
 
 	// setup a ticker
 	ticker := time.NewTicker(statusCheckFrequency)
@@ -145,4 +147,11 @@ TIMEOUT_LOOP:
 		}
 	}
 	return resultErr
+}
+
+// Node is an interface that represents a node in the lab
+// and is implemented by containerlab nodes.
+type Node interface {
+	Config() *types.NodeConfig
+	GetEndpoints() []links.Endpoint
 }

@@ -7,9 +7,9 @@ import (
 	"github.com/scrapli/scrapligo/platform"
 	"github.com/scrapli/scrapligo/util"
 
+	"github.com/charmbracelet/log"
 	"github.com/scrapli/scrapligo/driver/network"
 	"github.com/scrapli/scrapligo/driver/options"
-	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -26,9 +26,9 @@ var (
 			"exec": "docker",
 			"open": "exec -it",
 		},
-		"containerd": {
-			"exec": "ctr",
-			"open": "-n clab task exec -t --exec-id clab",
+		"podman": {
+			"exec": "podman",
+			"open": "exec -it",
 		},
 	}
 )

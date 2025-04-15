@@ -5,34 +5,45 @@
 package vr_sros
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/scrapli/scrapligo/driver/network"
 	"github.com/scrapli/scrapligo/driver/options"
 	scraplilogging "github.com/scrapli/scrapligo/logging"
 	"github.com/scrapli/scrapligo/platform"
 	"github.com/scrapli/scrapligo/transport"
 	"github.com/scrapli/scrapligo/util"
-	log "github.com/sirupsen/logrus"
 	"github.com/srl-labs/containerlab/clab/exec"
 	"github.com/srl-labs/containerlab/netconf"
 	"github.com/srl-labs/containerlab/nodes"
 	"github.com/srl-labs/containerlab/types"
 	"github.com/srl-labs/containerlab/utils"
+	"golang.org/x/crypto/ssh"
 )
 
 var (
-	kindnames          = []string{"vr-sros", "vr-nokia_sros"}
+	kindNames          = []string{"nokia_sros", "vr-sros", "vr-nokia_sros"}
 	defaultCredentials = nodes.NewCredentials("admin", "admin")
+
+	InterfaceRegexp = regexp.MustCompile(`1/1/(?P<port>\d+)`)
+	InterfaceOffset = 1
+	InterfaceHelp   = "1/1/X (where X >= 1) or ethX (where X >= 1)"
 )
 
 const (
+	generateable     = true
+	generateIfFormat = "1/1/%d"
+
 	vrsrosDefaultType   = "sr-1"
 	scrapliPlatformName = "nokia_sros"
 	configDirName       = "tftpboot"
@@ -40,23 +51,41 @@ const (
 	licenseFName        = "license.txt"
 )
 
+// SROSTemplateData holds ssh keys for template generation.
+type SROSTemplateData struct {
+	SSHPubKeysRSA   []string
+	SSHPubKeysECDSA []string
+}
+
 // Register registers the node in the NodeRegistry.
 func Register(r *nodes.NodeRegistry) {
-	r.Register(kindnames, func() nodes.Node {
+	generateNodeAttributes := nodes.NewGenerateNodeAttributes(generateable, generateIfFormat)
+	platformAttrs := &nodes.PlatformAttrs{
+		ScrapliPlatformName: scrapliPlatformName,
+	}
+
+	nrea := nodes.NewNodeRegistryEntryAttributes(defaultCredentials, generateNodeAttributes, platformAttrs)
+
+	r.Register(kindNames, func() nodes.Node {
 		return new(vrSROS)
-	}, defaultCredentials)
+	}, nrea)
 }
 
 type vrSROS struct {
-	nodes.DefaultNode
+	nodes.VRNode
+	// SSH public keys extracted from the clab host
+	sshPubKeys []ssh.PublicKey
 }
 
 func (s *vrSROS) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 	// Init DefaultNode
-	s.DefaultNode = *nodes.NewDefaultNode(s)
+	s.VRNode = *nodes.NewVRNode(s)
 	// set virtualization requirement
 	s.HostRequirements.VirtRequired = true
 	s.LicensePolicy = types.LicensePolicyWarn
+	// SR OS requires unbound pubkey authentication mode until this is
+	// gets fixed in later SR OS release.
+	s.SSHConfig.PubkeyAuthentication = types.PubkeyAuthValueUnbound
 
 	s.Cfg = cfg
 	for _, o := range opts {
@@ -81,10 +110,14 @@ func (s *vrSROS) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 		s.Cfg.Binds = append(s.Cfg.Binds, "/dev:/dev")
 	}
 
-	s.Cfg.Cmd = fmt.Sprintf("--trace --connection-mode %s --hostname %s --variant \"%s\"", s.Cfg.Env["CONNECTION_MODE"],
+	s.Cfg.Cmd = fmt.Sprintf("--trace --connection-mode %s --hostname %s --variant %q", s.Cfg.Env["CONNECTION_MODE"],
 		s.Cfg.ShortName,
 		s.Cfg.NodeType,
 	)
+
+	s.InterfaceRegexp = InterfaceRegexp
+	s.InterfaceOffset = InterfaceOffset
+	s.InterfaceHelp = InterfaceHelp
 
 	return nil
 }
@@ -95,25 +128,65 @@ func (s *vrSROS) PreDeploy(_ context.Context, params *nodes.PreDeployParams) err
 	if err != nil {
 		return nil
 	}
+
+	// store public keys extracted from clab host
+	s.sshPubKeys = params.SSHPubKeys
+
 	return createVrSROSFiles(s)
 }
 
 func (s *vrSROS) PostDeploy(ctx context.Context, _ *nodes.PostDeployParams) error {
-	if isPartialConfigFile(s.Cfg.StartupConfig) {
-		log.Infof("Waiting for %s to boot and apply config from %s", s.Cfg.LongName, s.Cfg.StartupConfig)
+	// b holds the configuration to be applied to the node
+	b := &bytes.Buffer{}
 
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-		defer cancel()
+	// apply partial configs if partial config is used and existing node config does not exist
+	if isPartialConfigFile(s.Cfg.StartupConfig) && !nodeConfigExists(s.Cfg.LabDir) {
+		log.Info("Adding configuration",
+			"node", s.Cfg.LongName,
+			"type", "partial",
+			"source", s.Cfg.StartupConfig)
 
-		err := s.applyPartialConfig(ctx, s.Cfg.MgmtIPv4Address, scrapliPlatformName,
-			defaultCredentials.GetUsername(), defaultCredentials.GetPassword(),
-			s.Cfg.StartupConfig,
-		)
+		r, err := os.Open(s.Cfg.StartupConfig)
 		if err != nil {
 			return err
 		}
 
-		log.Infof("%s: configuration applied", s.Cfg.LongName)
+		defer r.Close() // skipcq: GO-S2307
+
+		_, err = io.Copy(b, r)
+		if err != nil {
+			return err
+		}
+	}
+
+	// skip ssh key configuration if CLAB_SKIP_SROS_SSH_KEY_CONFIG env var is set
+	// which is needed for SR OS nodes running in classic CLI mode, because our key
+	// injection mechanism assumes MD-CLI mode.
+	_, skipSSHKeyCfg := os.LookupEnv("CLAB_SKIP_SROS_SSH_KEY_CONFIG")
+
+	if len(s.sshPubKeys) > 0 && !skipSSHKeyCfg {
+		log.Info("Adding public keys configuration", "node", s.Cfg.LongName)
+
+		sshConf, err := s.generateSSHPublicKeysConfig()
+		if err != nil {
+			return err
+		}
+
+		_, err = io.Copy(b, sshConf)
+		if err != nil {
+			return err
+		}
+	}
+
+	// apply the aggregated config snippets
+	if b.Len() > 0 {
+		err := s.applyPartialConfig(ctx, s.Cfg.MgmtIPv4Address, scrapliPlatformName,
+			defaultCredentials.GetUsername(), defaultCredentials.GetPassword(),
+			b,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -133,26 +206,18 @@ func (s *vrSROS) SaveConfig(_ context.Context) error {
 	return nil
 }
 
-// CheckInterfaceName checks if a name of the interface referenced in the topology file correct.
-func (s *vrSROS) CheckInterfaceName() error {
-	// vsim doesn't seem to support >20 interfaces, yet we allow to set max if number 32 just in case.
-	// https://regex101.com/r/bx6kzM/1
-	ifRe := regexp.MustCompile(`eth([1-9]|[12][0-9]|3[0-2])$`)
-	for _, e := range s.Config().Endpoints {
-		if !ifRe.MatchString(e.EndpointName) {
-			return fmt.Errorf("nokia SR OS interface name %q doesn't match the required pattern. SR OS interfaces should be named as ethX, where X is from 1 to 32", e.EndpointName)
-		}
-	}
-
-	return nil
-}
-
 func createVrSROSFiles(node nodes.Node) error {
 	nodeCfg := node.Config()
 
 	// use default startup config load function if config in full form is provided
 	if !isPartialConfigFile(nodeCfg.StartupConfig) {
-		nodes.LoadStartupConfigFileVr(node, configDirName, startupCfgFName)
+		// do not create new config file if there's existing config file
+		if nodeConfigExists(nodeCfg.LabDir) {
+			log.Infof("Using existing config file (%s) instead of applying a new one",
+				filepath.Join(nodeCfg.LabDir, configDirName, startupCfgFName))
+		} else {
+			nodes.LoadStartupConfigFileVr(node, configDirName, startupCfgFName)
+		}
 	}
 
 	if nodeCfg.License != "" {
@@ -173,6 +238,12 @@ func isPartialConfigFile(c string) bool {
 	return strings.Contains(strings.ToUpper(c), ".PARTIAL")
 }
 
+// nodeConfigExists returns true if a file at <labdir>/<node>/tftpboot/config.txt exists.
+func nodeConfigExists(labDir string) bool {
+	_, err := os.Stat(filepath.Join(labDir, configDirName, startupCfgFName))
+	return err == nil
+}
+
 // isHealthy checks if the "/health" file created by vrnetlab exists and contains "0 running".
 func (s *vrSROS) isHealthy(ctx context.Context) bool {
 	ex := exec.NewExecCmdFromSlice([]string{"grep", "0 running", "/health"})
@@ -188,19 +259,28 @@ func (s *vrSROS) isHealthy(ctx context.Context) bool {
 }
 
 // applyPartialConfig applies partial configuration to the SR OS.
-func (s *vrSROS) applyPartialConfig(ctx context.Context, addr, platformName, username, password string, configFile string) error {
+func (s *vrSROS) applyPartialConfig(ctx context.Context, addr, platformName,
+	username, password string, config io.Reader,
+) error { // skipcq: GO-R1005
 	var err error
 	var d *network.Driver
 
-	configContent, err := utils.ReadFileContent(configFile)
+	configContent, err := utils.SubstituteEnvsAndTemplate(config, s.Cfg)
 	if err != nil {
 		return err
 	}
 
+	configContentStr := configContent.String()
+
 	// check file contains content, otherwise exit early
-	if len(strings.TrimSpace(string(configContent))) == 0 {
+	if strings.TrimSpace(configContentStr) == "" {
 		return nil
 	}
+
+	log.Info("Waiting for node to be ready. This may take a while",
+		"node", s.Cfg.LongName,
+		"log", fmt.Sprintf("docker logs -f %[1]s", s.Cfg.LongName),
+	)
 
 	for loop := true; loop; {
 		if !s.isHealthy(ctx) {
@@ -213,9 +293,12 @@ func (s *vrSROS) applyPartialConfig(ctx context.Context, addr, platformName, use
 		case <-ctx.Done():
 			return fmt.Errorf("%s: timed out waiting to accept configs", addr)
 		default:
+			sl := log.StandardLog(log.StandardLogOptions{
+				ForceLevel: log.DebugLevel,
+			})
 			li, err := scraplilogging.NewInstance(
 				scraplilogging.WithLevel("debug"),
-				scraplilogging.WithLogger(log.Debugln))
+				scraplilogging.WithLogger(sl.Print))
 			if err != nil {
 				return err
 			}
@@ -250,19 +333,27 @@ func (s *vrSROS) applyPartialConfig(ctx context.Context, addr, platformName, use
 		}
 	}
 
-	mr, err := d.SendConfigsFromFile(configFile)
-	if err != nil || mr.Failed != nil {
-		return fmt.Errorf("failed to apply config; error: %+v %+v", err, mr.Failed)
-	}
-	// condfig snippets should not have commit command, so we need to commit manually
-	r, err := d.SendConfig("commit")
-	if err != nil || r.Failed != nil {
-		return fmt.Errorf("failed to commit config; error: %+v %+v", err, mr.Failed)
-	}
+	// Normalize character sequences to avoid interaction issues with CLI
+	replacer := strings.NewReplacer(
+		"\r\n", "\n", // replace EOL CRLF with LF
+		"\t", "    ", // replace tabs with 4 spaces
+	)
+	configContentStr = replacer.Replace(configContentStr)
 
-	r, err = d.SendCommand("/admin save")
-	if err != nil || r.Failed != nil {
-		return fmt.Errorf("failed to persist config; error: %+v %+v", err, mr.Failed)
+	// converting string to newline delimited string slice
+	cfgs := strings.Split(configContentStr, "\n")
+
+	// config snippets should not have commit command, so we need to commit manually
+	// and quit from the config mode
+	cfgs = append(cfgs, "commit", "/admin save", "/exit all", "quit-config")
+
+	mr, err := d.SendConfigs(cfgs)
+	if err != nil || (mr != nil && mr.Failed != nil) {
+		if mr != nil {
+			return fmt.Errorf("failed to apply config; error: %+v %+v", err, mr.Failed)
+		} else {
+			return fmt.Errorf("failed to apply config; error: %+v", err)
+		}
 	}
 
 	return nil

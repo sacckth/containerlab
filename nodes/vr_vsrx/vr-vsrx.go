@@ -8,8 +8,9 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"regexp"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/srl-labs/containerlab/netconf"
 	"github.com/srl-labs/containerlab/nodes"
 	"github.com/srl-labs/containerlab/types"
@@ -17,12 +18,20 @@ import (
 )
 
 var (
-	kindnames          = []string{"vr-vsrx", "vr-juniper_vsrx"}
+	kindNames          = []string{"juniper_vsrx", "vr-vsrx", "vr-juniper_vsrx"}
 	defaultCredentials = nodes.NewCredentials("admin", "admin@123")
+
+	InterfaceRegexp = regexp.MustCompile(`(?:et|xe|ge)-0/0/(?P<port>\d+)$`)
+	InterfaceOffset = 0
+	InterfaceHelp   = "(et|xe|ge)-0/0/X (where X >= 0) or ethX (where X >= 1)"
 )
 
 const (
+	generateable     = true
+	generateIfFormat = "ge-0/0/%d"
+
 	scrapliPlatformName = "juniper_junos"
+	NapalmPlatformName  = "junos"
 
 	configDirName   = "config"
 	startupCfgFName = "startup-config.cfg"
@@ -30,18 +39,26 @@ const (
 
 // Register registers the node in the NodeRegistry.
 func Register(r *nodes.NodeRegistry) {
-	r.Register(kindnames, func() nodes.Node {
+	generateNodeAttributes := nodes.NewGenerateNodeAttributes(generateable, generateIfFormat)
+	platformAttrs := &nodes.PlatformAttrs{
+		ScrapliPlatformName: scrapliPlatformName,
+		NapalmPlatformName:  NapalmPlatformName,
+	}
+
+	nrea := nodes.NewNodeRegistryEntryAttributes(defaultCredentials, generateNodeAttributes, platformAttrs)
+
+	r.Register(kindNames, func() nodes.Node {
 		return new(vrVSRX)
-	}, defaultCredentials)
+	}, nrea)
 }
 
 type vrVSRX struct {
-	nodes.DefaultNode
+	nodes.VRNode
 }
 
 func (n *vrVSRX) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
-	// Init DefaultNode
-	n.DefaultNode = *nodes.NewDefaultNode(n)
+	// Init VRNode
+	n.VRNode = *nodes.NewVRNode(n)
 	// set virtualization requirement
 	n.HostRequirements.VirtRequired = true
 
@@ -70,6 +87,10 @@ func (n *vrVSRX) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 	n.Cfg.Cmd = fmt.Sprintf("--username %s --password %s --hostname %s --connection-mode %s --trace",
 		defaultCredentials.GetUsername(), defaultCredentials.GetPassword(), n.Cfg.ShortName, n.Cfg.Env["CONNECTION_MODE"])
 
+	n.InterfaceRegexp = InterfaceRegexp
+	n.InterfaceOffset = InterfaceOffset
+	n.InterfaceHelp = InterfaceHelp
+
 	return nil
 }
 
@@ -94,9 +115,4 @@ func (n *vrVSRX) SaveConfig(_ context.Context) error {
 
 	log.Infof("saved %s running configuration to startup configuration file\n", n.Cfg.ShortName)
 	return nil
-}
-
-// CheckInterfaceName checks if a name of the interface referenced in the topology file correct.
-func (n *vrVSRX) CheckInterfaceName() error {
-	return nodes.GenericVMInterfaceCheck(n.Cfg.ShortName, n.Cfg.Endpoints)
 }

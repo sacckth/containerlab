@@ -5,6 +5,7 @@
 package xrd
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"fmt"
@@ -12,8 +13,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"text/template"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/srl-labs/containerlab/netconf"
 	"github.com/srl-labs/containerlab/nodes"
 	"github.com/srl-labs/containerlab/types"
@@ -21,26 +23,44 @@ import (
 )
 
 var (
-	kindnames          = []string{"xrd", "cisco_xrd"}
+	kindNames          = []string{"xrd", "cisco_xrd"}
 	defaultCredentials = nodes.NewCredentials("clab", "clab@123")
 	xrdEnv             = map[string]string{
 		"XR_FIRST_BOOT_CONFIG": "/etc/xrd/first-boot.cfg",
 		"XR_MGMT_INTERFACES":   "linux:eth0,xr_name=Mg0/RP0/CPU0/0,chksum,snoop_v4,snoop_v6",
+		"XR_EVERY_BOOT_SCRIPT": "/etc/xrd/mgmt_intf_v6_addr.sh",
 	}
+
+	//go:embed mgmt_intf_v6_addr.sh.tmpl
+	scriptTemplate string
+
+	xrdMgmtScriptTpl, _ = template.New("clab-xrd-mgmt-ipv6-script").Funcs(utils.CreateFuncs()).Parse(scriptTemplate)
 
 	//go:embed xrd.cfg
 	cfgTemplate string
 )
 
 const (
+	generateable     = true
+	generateIfFormat = "eth%d"
+
 	scrapliPlatformName = "cisco_iosxr"
+	NapalmPlatformName  = "iosxr"
 )
 
 // Register registers the node in the NodeRegistry.
 func Register(r *nodes.NodeRegistry) {
-	r.Register(kindnames, func() nodes.Node {
+	generateNodeAttributes := nodes.NewGenerateNodeAttributes(generateable, generateIfFormat)
+	platformAttrs := &nodes.PlatformAttrs{
+		ScrapliPlatformName: scrapliPlatformName,
+		NapalmPlatformName:  NapalmPlatformName,
+	}
+
+	nrea := nodes.NewNodeRegistryEntryAttributes(defaultCredentials, generateNodeAttributes, platformAttrs)
+
+	r.Register(kindNames, func() nodes.Node {
 		return new(xrd)
-	}, defaultCredentials)
+	}, nrea)
 }
 
 type xrd struct {
@@ -61,6 +81,8 @@ func (n *xrd) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 		fmt.Sprint(filepath.Join(n.Cfg.LabDir, "first-boot.cfg"), ":/etc/xrd/first-boot.cfg"),
 		// persist data by mounting /xr-storage
 		fmt.Sprint(filepath.Join(n.Cfg.LabDir, "xr-storage"), ":/xr-storage"),
+		// management IPv6 address script
+		fmt.Sprint(filepath.Join(n.Cfg.LabDir, "mgmt_intf_v6_addr.sh"), ":/etc/xrd/mgmt_intf_v6_addr.sh"),
 	)
 
 	return nil
@@ -77,6 +99,27 @@ func (n *xrd) PreDeploy(ctx context.Context, params *nodes.PreDeployParams) erro
 	}
 
 	return n.createXRDFiles(ctx)
+}
+
+func (n *xrd) PostDeploy(_ context.Context, _ *nodes.PostDeployParams) error {
+	log.Infof("Running postdeploy actions for Cisco XRd '%s' node", n.Cfg.ShortName)
+
+	// create interface script template
+	tpl := xrdScriptTmpl{
+		MgmtIPv6Addr:      n.Cfg.MgmtIPv6Address,
+		MgmtIPv6PrefixLen: n.Cfg.MgmtIPv6PrefixLength,
+	}
+
+	// create script from template
+	buf := new(bytes.Buffer)
+	err := xrdMgmtScriptTpl.Execute(buf, tpl)
+	if err != nil {
+		return err
+	}
+	// write it to disk
+	utils.CreateFile(filepath.Join(n.Cfg.LabDir, "mgmt_intf_v6_addr.sh"), buf.String())
+
+	return err
 }
 
 func (n *xrd) SaveConfig(_ context.Context) error {
@@ -100,6 +143,14 @@ func (n *xrd) createXRDFiles(_ context.Context) error {
 	// generate first-boot config
 	cfg := filepath.Join(n.Cfg.LabDir, "first-boot.cfg")
 	nodeCfg.ResStartupConfig = cfg
+
+	mgmt_script_path := filepath.Join(n.Cfg.LabDir, "mgmt_intf_v6_addr.sh")
+
+	// generate script file
+	if !utils.FileExists(mgmt_script_path) {
+		utils.CreateFile(mgmt_script_path, "")
+		os.Chmod(mgmt_script_path, 0775) // skipcq: GSC-G302
+	}
 
 	// set mgmt IPv4/IPv6 gateway as it is already known by now
 	// since the container network has been created before we launch nodes
@@ -130,10 +181,10 @@ func (n *xrd) genInterfacesEnv() {
 	// here we take the number of links users set in the topology to get the right # of links
 	var interfaceEnvVar string
 
-	for _, ep := range n.Config().Endpoints {
+	for _, ep := range n.Endpoints {
 		// ifName is a linux interface name with dashes swapped for slashes to be used in the config
-		ifName := strings.ReplaceAll(ep.EndpointName, "-", "/")
-		interfaceEnvVar += fmt.Sprintf("linux:%s,xr_name=%s;", ep.EndpointName, ifName)
+		ifName := strings.ReplaceAll(ep.GetIfaceName(), "-", "/")
+		interfaceEnvVar += fmt.Sprintf("linux:%s,xr_name=%s;", ep.GetIfaceName(), ifName)
 	}
 
 	interfaceEnv := map[string]string{"XR_INTERFACES": interfaceEnvVar}
@@ -144,11 +195,16 @@ func (n *xrd) genInterfacesEnv() {
 // CheckInterfaceName checks if a name of the interface referenced in the topology file correct.
 func (n *xrd) CheckInterfaceName() error {
 	ifRe := regexp.MustCompile(`^Gi0-0-0-\d+$`)
-	for _, e := range n.Config().Endpoints {
-		if !ifRe.MatchString(e.EndpointName) {
-			return fmt.Errorf("cisco XRd interface name %q doesn't match the required pattern. XRd interfaces should be named as Gi0-0-0-X where X is the interface number", e.EndpointName)
+	for _, e := range n.Endpoints {
+		if !ifRe.MatchString(e.GetIfaceName()) {
+			return fmt.Errorf("cisco XRd interface name %q doesn't match the required pattern. XRd interfaces should be named as Gi0-0-0-X where X is the interface number", e.GetIfaceName())
 		}
 	}
 
 	return nil
+}
+
+type xrdScriptTmpl struct {
+	MgmtIPv6Addr      string
+	MgmtIPv6PrefixLen int
 }

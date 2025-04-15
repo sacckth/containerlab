@@ -1,14 +1,16 @@
 ---
 search:
   boost: 4
+kind_code_name: arista_veos
+kind_display_name: Arista vEOS
 ---
 # Arista vEOS
 
-[Arista vEOS](https://www.arista.com/en/cg-veos-router/veos-router-overview) virtualized router is identified with `vr-veos` or `vr-arista_veos` kind in the [topology file](../topo-def-file.md). It is built using [vrnetlab](../vrnetlab.md) project and essentially is a Qemu VM packaged in a docker container format.
+[Arista vEOS](https://www.arista.com/en/cg-veos-router/veos-router-overview) virtualized router is identified with `-{{ kind_code_name }}-` kind in the [topology file](../topo-def-file.md). It is built using [vrnetlab](../vrnetlab.md) project and essentially is a Qemu VM packaged in a docker container format.
 
-vr-veos nodes launched with containerlab comes up pre-provisioned with SSH, SNMP, NETCONF and gNMI services enabled.
+Arista vEOS nodes launched with containerlab comes up pre-provisioned with SSH, SNMP, NETCONF and gNMI services enabled.
 
-## Managing vr-veos nodes
+## Managing Arista vEOS nodes
 
 !!!note
     Containers with vEOS inside will take ~4min to fully boot.  
@@ -17,7 +19,7 @@ vr-veos nodes launched with containerlab comes up pre-provisioned with SSH, SNMP
 Arista vEOS node launched with containerlab can be managed via the following interfaces:
 
 === "bash"
-    to connect to a `bash` shell of a running vr-veos container:
+    to connect to a `bash` shell of a running Arista vEOS container:
     ```bash
     docker exec -it <container-name/id> bash
     ```
@@ -32,7 +34,7 @@ Arista vEOS node launched with containerlab can be managed via the following int
     ssh admin@<container-name> -p 830 -s netconf
     ```
 === "gNMI"
-    using the best in class [gnmic](https://gnmic.kmrd.dev) gNMI client as an example:
+    using the best in class [gnmic](https://gnmic.openconfig.net/) gNMI client as an example:
     ```bash
     gnmic -a <container-name/node-mgmt-address>:6030 --insecure \
     -u admin -p admin \
@@ -43,31 +45,47 @@ Arista vEOS node launched with containerlab can be managed via the following int
 !!!info
     Default user credentials: `admin:admin`
 
-## Interfaces mapping
-vr-veos container can have up to 144 interfaces and uses the following mapping rules:
+## Interface naming
+
+You can use [interfaces names](../topo-def-file.md#interface-naming) in the topology file like they appear in -{{ kind_display_name }}-.
+
+The interface naming convention is: `Ethernet1/X` (or `Et1/X`), where `X` is the port number.
+
+With that naming convention in mind:
+
+* `Ethernet1/1` - first data port available
+* `Ethernet1/2` - second data port, and so on...
+
+/// admonition
+    type: note
+Data port numbering starts at `1`.
+///
+
+The example ports above would be mapped to the following Linux interfaces inside the container running the -{{ kind_display_name }}- VM:
 
 * `eth0` - management interface connected to the containerlab management network
-* `eth1` - first data interface, mapped to first data port of vEOS line card
-* `eth2+` - second and subsequent data interface
+* `eth1` - first data interface, mapped to the first data port of the VM (rendered as `Ethernet1/1`)
+* `eth2+` - second and subsequent data interfaces, mapped to the second and subsequent data ports of the VM (rendered as `Ethernet1/2` and so on)
 
-When containerlab launches vr-veos node, it will assign IPv4/6 address to the `eth0` interface. These addresses can be used to reach management plane of the router.
+When containerlab launches -{{ kind_display_name }}- node the management interface of the VM gets assigned `10.0.0.15/24` address from the QEMU DHCP server. This interface is transparently stitched with container's `eth0` interface such that users can reach the management plane of the -{{ kind_display_name }}- using containerlab's assigned IP.
 
-Data interfaces `eth1+` needs to be configured with IP addressing manually using CLI/management protocols.
-
+Data interfaces `Ethernet1/1+` need to be configured with IP addressing manually using CLI or other available management interfaces.
 
 ## Features and options
-### Node configuration
-vr-veos nodes come up with a basic configuration where only the control plane and line cards are provisioned, as well as the `admin` user and management interfaces such as NETCONF, SNMP, gNMI.
 
+### Node configuration
+
+Arista vEOS nodes come up with a basic configuration where only the control plane and line cards are provisioned, as well as the `admin` user and management interfaces such as NETCONF, SNMP, gNMI.
 
 #### Startup configuration
+
 It is possible to make vEOS nodes boot up with a user-defined startup-config instead of a built-in one. With a [`startup-config`](../nodes.md#startup-config) property of the node/kind user sets the path to the config file that will be mounted to a container and used as a startup-config:
 
 ```yaml
 topology:
   nodes:
     node:
-      kind: vr-veos
+      kind: arista_veos
       startup-config: myconfig.txt
 ```
 

@@ -6,23 +6,23 @@ package clab
 
 import (
 	"context"
-	"encoding/json"
+	_ "embed"
 	"io"
 	"path/filepath"
 	"text/template"
 
-	"github.com/hairyhenderson/gomplate/v3"
-	"github.com/hairyhenderson/gomplate/v3/data"
-
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/srl-labs/containerlab/types"
+	"github.com/srl-labs/containerlab/utils"
 )
 
-// GenerateExports generates various export files and writes it to a lab location.
+// GenerateExports generates various export files and writes it to a file in the lab directory.
+// `p` is the path to the template.
+// `f` is the file to write the exported data to.
 func (c *CLab) GenerateExports(ctx context.Context, f io.Writer, p string) error {
 	err := c.exportTopologyDataWithTemplate(ctx, f, p)
 	if err != nil {
-		log.Warningf("Cannot parse export template %s: %v", p, err)
+		log.Warn("Failed to execute the export template", "template", p, "err", err)
 		// a minimal topology data file that just provides the name of a lab that failed to generate a proper export data
 		err = c.exportTopologyDataWithMinimalTemplate(f)
 		if err != nil {
@@ -35,28 +35,41 @@ func (c *CLab) GenerateExports(ctx context.Context, f io.Writer, p string) error
 // TopologyExport holds a combination of CLab structure and map of NodeConfig types,
 // which expands Node definitions with dynamically created values.
 type TopologyExport struct {
-	Name        string                       `json:"name"`
-	Type        string                       `json:"type"`
-	Clab        *CLab                        `json:"clab,omitempty"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+	Clab *CLab  `json:"clab,omitempty"`
+	// SSHPubKeys is a list of string representations of SSH public keys.
+	SSHPubKeys  []string                     `json:"SSHPubKeys,omitempty"`
 	NodeConfigs map[string]*types.NodeConfig `json:"nodeconfigs,omitempty"`
 }
 
-// exportTopologyDataWithTemplate generates and writes topology data file to w using a template.
-func (c *CLab) exportTopologyDataWithTemplate(ctx context.Context, w io.Writer, p string) error {
-	n := filepath.Base(p)
-	t, err := template.New(n).
-		Funcs(gomplate.CreateFuncs(context.Background(), new(data.Data))).
-		Funcs(template.FuncMap{
-			"ToJSON": func(v interface{}) string {
-				a, _ := json.Marshal(v)
-				return string(a)
-			},
-			"ToJSONPretty": func(v interface{}, prefix string, indent string) string {
-				a, _ := json.MarshalIndent(v, prefix, indent)
-				return string(a)
-			},
-		}).
-		ParseFiles(p)
+//go:embed export_templates/auto.tmpl
+var defaultExportTemplate string
+
+//go:embed export_templates/full.tmpl
+var fullExportTemplate string
+
+// exportTopologyDataWithTemplate generates and writes topology data file to w using a template referenced by path `p`.
+func (c *CLab) exportTopologyDataWithTemplate(_ context.Context, w io.Writer, p string) error {
+	name := "export"
+	if p != "" {
+		name = filepath.Base(p)
+	}
+
+	t := template.New(name).
+		Funcs(utils.CreateFuncs())
+
+	var err error
+
+	switch {
+	case p != "":
+		_, err = t.ParseFiles(p)
+	case p == "__full":
+		_, err = t.Parse(fullExportTemplate)
+	default:
+		_, err = t.Parse(defaultExportTemplate)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -65,6 +78,7 @@ func (c *CLab) exportTopologyDataWithTemplate(ctx context.Context, w io.Writer, 
 		Name:        c.Config.Name,
 		Type:        "clab",
 		Clab:        c,
+		SSHPubKeys:  utils.MarshalSSHPubKeys(c.SSHPubKeys),
 		NodeConfigs: make(map[string]*types.NodeConfig),
 	}
 

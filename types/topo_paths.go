@@ -6,21 +6,25 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/srl-labs/containerlab/utils"
 )
 
 const (
-	ansibleInventoryFileName  = "ansible-inventory.yml"
-	topologyExportDatFileName = "topology-data.json"
-	authzKeysFileName         = "authorized_keys"
-	tlsDir                    = ".tls"
-	caDir                     = "ca"
-	graph                     = "graph"
-	labDirPrefix              = "clab-"
-	backupFileSuffix          = ".bak"
-	backupFilePrefix          = "."
-	CertFileSuffix            = ".pem"
-	KeyFileSuffix             = ".key"
-	CSRFileSuffix             = ".csr"
+	ansibleInventoryFileName      = "ansible-inventory.yml"
+	nornirSimpleInventoryFileName = "nornir-simple-inventory.yml"
+	topologyExportDatFileName     = "topology-data.json"
+	authzKeysFileName             = "authorized_keys"
+	tlsDir                        = ".tls"
+	caDir                         = "ca"
+	graph                         = "graph"
+	labDirPrefix                  = "clab-"
+	backupFileSuffix              = ".bak"
+	backupFilePrefix              = "."
+	CertFileSuffix                = ".pem"
+	KeyFileSuffix                 = ".key"
+	CSRFileSuffix                 = ".csr"
+	sshConfigFilePathTmpl         = "/etc/ssh/ssh_config.d/clab-%s.conf"
 )
 
 // clabTmpDir is the directory where clab stores temporary and/or downloaded files.
@@ -29,9 +33,11 @@ var clabTmpDir = filepath.Join(os.TempDir(), ".clab")
 // TopoPaths creates all the required absolute paths and filenames for a topology.
 // generally all these paths are deduced from two main paths. The topology file path and the lab dir path.
 type TopoPaths struct {
-	topoFile string
-	labDir   string
-	topoName string
+	topoFile           string
+	labDir             string
+	topoName           string
+	externalCACertFile string // if an external CA certificate is used the path to the Cert file is stored here
+	externalCAKeyFile  string // if an external CA certificate is used the path to the Key file is stored here
 }
 
 // NewTopoPaths constructs a new TopoPaths instance.
@@ -43,12 +49,6 @@ func NewTopoPaths(topologyFile string) (*TopoPaths, error) {
 	}
 
 	return t, err
-}
-
-func NewCaTopoPaths(labDir string) (*TopoPaths, error) {
-	return &TopoPaths{
-		labDir: labDir,
-	}, nil
 }
 
 // SetTopologyFilePath sets the topology file path.
@@ -69,31 +69,56 @@ func (t *TopoPaths) SetTopologyFilePath(topologyFile string) error {
 	return nil
 }
 
-// SetLabDir sets the labDir.
-func (t *TopoPaths) SetLabDir(topologyName string) (err error) {
+func (t *TopoPaths) SetLabDir(p string) (err error) {
+	if !utils.DirExists(p) {
+		return fmt.Errorf("folder %s does not exist or is not accessible", p)
+	}
+	t.labDir = p
+	return nil
+}
+
+// SetLabDirByPrefix sets the labDir foldername (no abs path, but the last element) usually the topology name.
+func (t *TopoPaths) SetLabDirByPrefix(topologyName string) (err error) {
 	t.topoName = topologyName
 	// if "CLAB_LABDIR_BASE" Env Var is set, use that dir as a base
-	// for the labDir, otherwise use PWD.
+	// for the labDir, otherwise use dir where topology clab file is.
 	baseDir := os.Getenv("CLAB_LABDIR_BASE")
 	if baseDir == "" {
-		baseDir, err = os.Getwd()
-		if err != nil {
-			return err
-		}
+		baseDir = t.TopologyFileDir()
 	}
 	// construct the path
 	t.labDir = path.Join(baseDir, labDirPrefix+topologyName)
 	return nil
 }
 
+// SetExternalCaFiles sets the paths for the cert and key files if externally generated should be used.
+func (t *TopoPaths) SetExternalCaFiles(certFile, keyFile string) error {
+	// resolve the provided paths to external CA files
+	certFile = utils.ResolvePath(certFile, t.TopologyFileDir())
+	keyFile = utils.ResolvePath(keyFile, t.TopologyFileDir())
+
+	if !utils.FileExists(certFile) {
+		return fmt.Errorf("external CA cert file %s does not exist", certFile)
+	}
+
+	if !utils.FileExists(keyFile) {
+		return fmt.Errorf("external CA key file %s does not exist", keyFile)
+	}
+
+	t.externalCACertFile = certFile
+	t.externalCAKeyFile = keyFile
+
+	return nil
+}
+
+// SSHConfigPath returns the topology dependent ssh config file name.
+func (t *TopoPaths) SSHConfigPath() string {
+	return fmt.Sprintf(sshConfigFilePathTmpl, t.topoName)
+}
+
 // TLSBaseDir returns the path of the TLS directory structure.
 func (t *TopoPaths) TLSBaseDir() string {
 	return path.Join(t.labDir, tlsDir)
-}
-
-// CARootCertDir returns the directory that contains the root CA certificat and key.
-func (t *TopoPaths) CARootCertDir() string {
-	return path.Join(t.TLSBaseDir(), caDir)
 }
 
 // NodeTLSDir returns the directory that contains the certificat data for the given node.
@@ -136,19 +161,28 @@ func (t *TopoPaths) AnsibleInventoryFileAbsPath() string {
 	return path.Join(t.labDir, ansibleInventoryFileName)
 }
 
+// NornirSimpleInventoryFileAbsPath returns the absolute path to the ansible-inventory file.
+func (t *TopoPaths) NornirSimpleInventoryFileAbsPath() string {
+	return path.Join(t.labDir, nornirSimpleInventoryFileName)
+}
+
 // TopologyFilenameAbsPath returns the absolute path to the topology file.
 func (t *TopoPaths) TopologyFilenameAbsPath() string {
 	return t.topoFile
 }
 
 // ClabTmpDir returns the path to the temporary directory where clab stores temporary and/or downloaded files.
-func (t *TopoPaths) ClabTmpDir() string {
+// Creates the directory if it does not exist.
+func (*TopoPaths) ClabTmpDir() string {
+	if !utils.DirExists(clabTmpDir) {
+		utils.CreateDirectory(clabTmpDir, 0755)
+	}
 	return clabTmpDir
 }
 
 // StartupConfigDownloadFileAbsPath returns the absolute path to the startup-config file
 // when it is downloaded from a remote location to the clab temp directory.
-func (t *TopoPaths) StartupConfigDownloadFileAbsPath(node string, postfix string) string {
+func (t *TopoPaths) StartupConfigDownloadFileAbsPath(node, postfix string) string {
 	return filepath.Join(t.ClabTmpDir(), fmt.Sprintf("%s-%s-%s", t.topoName, node, postfix))
 }
 
@@ -203,7 +237,28 @@ func (t *TopoPaths) NodeCertCSRAbsFilename(nodeName string) string {
 	return path.Join(t.NodeTLSDir(nodeName), nodeName+CSRFileSuffix)
 }
 
-// CaDir returns the dir name of the CA directory structure.
-func (t *TopoPaths) CaDir() string {
-	return caDir
+// CaCertAbsFilename returns the path to the CA cert file.
+// If external CA is used, the path to the external CA cert file is returned.
+// Otherwise the path to the generated CA cert file is returned.
+func (t *TopoPaths) CaCertAbsFilename() string {
+	if t.externalCACertFile != "" {
+		return t.externalCACertFile
+	}
+
+	return t.NodeCertAbsFilename(caDir)
+}
+
+// CaKeyAbsFilename returns the path to the CA key file.
+// If external CA is used, the path to the external CA key file is returned.
+// Otherwise the path to the generated CA key file is returned.
+func (t *TopoPaths) CaKeyAbsFilename() string {
+	if t.externalCAKeyFile != "" {
+		return t.externalCAKeyFile
+	}
+
+	return t.NodeCertKeyAbsFilename(caDir)
+}
+
+func (t *TopoPaths) CaCSRAbsFilename() string {
+	return t.NodeCertCSRAbsFilename(caDir)
 }

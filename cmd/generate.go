@@ -12,37 +12,18 @@ import (
 	"strconv"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 	"github.com/srl-labs/containerlab/clab"
+	"github.com/srl-labs/containerlab/cmd/common"
+	"github.com/srl-labs/containerlab/links"
+	"github.com/srl-labs/containerlab/nodes"
 	"github.com/srl-labs/containerlab/types"
+	"github.com/srl-labs/containerlab/utils"
 	"gopkg.in/yaml.v2"
 )
 
-var interfaceFormat = map[string]string{
-	"srl":      "e1-%d",
-	"ceos":     "eth%d",
-	"crpd":     "eth%d",
-	"sonic-vs": "eth%d",
-	"linux":    "eth%d",
-	"bridge":   "veth%d",
-	"vr-sros":  "eth%d",
-	"vr-vmx":   "eth%d",
-	"vr-vsrx":  "eth%d",
-	"vr-vqfx":  "eth%d",
-	"vr-xrv9k": "eth%d",
-	"vr-veos":  "eth%d",
-	"xrd":      "eth%d",
-	"rare":     "eth%d",
-}
-
-var supportedKinds = []string{
-	"srl", "ceos", "linux", "bridge", "sonic-vs", "crpd", "vr-sros",
-	"vr-vmx", "vr-vsrx", "vr-vqfx", "vr-xrv9k", "vr-veos", "xrd", "rare",
-}
-
 const (
-	defaultSRLType     = "ixrd2"
 	defaultNodePrefix  = "node"
 	defaultGroupPrefix = "tier"
 )
@@ -61,6 +42,7 @@ var (
 	groupPrefix string
 	file        string
 	deploy      bool
+	reg         *nodes.NodeRegistry
 )
 
 type nodesDef struct {
@@ -74,8 +56,8 @@ var generateCmd = &cobra.Command{
 	Use:     "generate",
 	Aliases: []string{"gen"},
 	Short:   "generate a Clos topology file, based on provided flags",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if name == "" {
+	RunE: func(_ *cobra.Command, _ []string) error {
+		if common.Name == "" {
 			return errors.New("provide a lab name with --name flag")
 		}
 		licenses, err := parseFlag(kind, license)
@@ -96,28 +78,39 @@ var generateCmd = &cobra.Command{
 		}
 		log.Debugf("parsed nodes definitions: %+v", nodeDefs)
 
-		b, err := generateTopologyConfig(name, mgmtNetName, mgmtIPv4Subnet.String(),
+		b, err := generateTopologyConfig(common.Name, mgmtNetName, mgmtIPv4Subnet.String(),
 			mgmtIPv6Subnet.String(), images, licenses, nodeDefs...)
 		if err != nil {
 			return err
 		}
 		log.Debugf("generated topo: %s", string(b))
 		if file != "" {
-			err = saveTopoFile(file, b)
+			err = utils.CreateFile(file, string(b))
 			if err != nil {
 				return err
 			}
 		}
 		if deploy {
+			err = common.CheckAndGetRootPrivs(nil, nil)
+			if err != nil {
+				return err
+			}
 			reconfigure = true
 			if file == "" {
-				file = fmt.Sprintf("%s.clab.yml", name)
-				err = saveTopoFile(file, b)
+				file = fmt.Sprintf("%s.clab.yml", common.Name)
+				err = utils.CreateFile(file, string(b))
 				if err != nil {
 					return err
 				}
 			}
-			topo = file
+			common.Topo = file
+
+			// Pass owner to deploy command if specified
+			if labOwner != "" {
+				// This will be picked up by the deploy command
+				os.Setenv("CLAB_OWNER", labOwner)
+			}
+
 			return deployCmd.RunE(deployCmd, nil)
 		}
 		if file == "" {
@@ -128,6 +121,22 @@ var generateCmd = &cobra.Command{
 }
 
 func init() {
+	c := &clab.CLab{}
+	c.Reg = nodes.NewNodeRegistry()
+	c.RegisterNodes()
+
+	reg = c.Reg
+
+	generateNodesAttributes := reg.GetGenerateNodeAttributes()
+	supportedKinds := []string{}
+
+	// prepare list of generateable node kinds
+	for k, v := range generateNodesAttributes {
+		if v.IsGenerateable() {
+			supportedKinds = append(supportedKinds, k)
+		}
+	}
+
 	rootCmd.AddCommand(generateCmd)
 	generateCmd.Flags().StringVarP(&mgmtNetName, "network", "", "", "management network name")
 	generateCmd.Flags().IPNetVarP(&mgmtIPv4Subnet, "ipv4-subnet", "4", net.IPNet{}, "management network IPv4 subnet range")
@@ -147,6 +156,9 @@ func init() {
 		"deploy a fabric based on the generated topology file")
 	generateCmd.Flags().UintVarP(&maxWorkers, "max-workers", "", 0,
 		"limit the maximum number of workers creating nodes and virtual wires")
+	// Add the owner flag to generate command
+	generateCmd.Flags().StringVarP(&labOwner, "owner", "", "",
+		"lab owner name (only for users in clab_admins group)")
 }
 
 func generateTopologyConfig(name, network, ipv4range, ipv6range string,
@@ -191,6 +203,9 @@ func generateTopologyConfig(name, network, ipv4range, ipv6range string,
 			}
 		}
 	}
+
+	generateNodesAttributes := reg.GetGenerateNodeAttributes()
+
 	for i := 0; i < numStages-1; i++ {
 		interfaceOffset := uint(0)
 		if i > 0 {
@@ -214,16 +229,24 @@ func generateTopologyConfig(name, network, ipv4range, ipv6range string,
 						Type:  nodes[i+1].typ,
 					}
 				}
-				config.Topology.Links = append(config.Topology.Links,
-					&types.LinkDefinition{
-						// Type: string(types.LinkTypeBrief),
-						LinkConfig: types.LinkConfig{
-							Endpoints: []string{
-								node1 + ":" + fmt.Sprintf(interfaceFormat[nodes[i].kind], k+1+interfaceOffset),
-								node2 + ":" + fmt.Sprintf(interfaceFormat[nodes[i+1].kind], j+1),
-							},
-						},
-					})
+
+				// create a raw veth link
+				l := &links.LinkVEthRaw{
+					Endpoints: []*links.EndpointRaw{
+						links.NewEndpointRaw(node1, fmt.Sprintf(
+							generateNodesAttributes[nodes[i].kind].GetInterfaceFormat(), k+1+interfaceOffset), ""),
+						links.NewEndpointRaw(node2, fmt.Sprintf(
+							generateNodesAttributes[nodes[i+1].kind].GetInterfaceFormat(), j+1), ""),
+					},
+				}
+
+				// encapsulate the brief rawlink in a linkdefinition
+				ld := &links.LinkDefinition{
+					Link: l.ToLinkBriefRaw(),
+				}
+
+				// add the link to the topology
+				config.Topology.Links = append(config.Topology.Links, ld)
 			}
 		}
 	}
@@ -312,18 +335,4 @@ func parseNodesFlag(kind string, nodes ...string) ([]nodesDef, error) {
 		result[idx] = def
 	}
 	return result, nil
-}
-
-func saveTopoFile(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666) // skipcq: GSC-G302
-	if err != nil {
-		return err
-	}
-
-	_, err = f.Write(data)
-	if err != nil {
-		return err
-	}
-
-	return f.Close()
 }

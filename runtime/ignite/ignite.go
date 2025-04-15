@@ -7,11 +7,7 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
-	"github.com/srl-labs/containerlab/clab/exec"
-	"github.com/srl-labs/containerlab/runtime"
-	"github.com/srl-labs/containerlab/types"
-	"github.com/srl-labs/containerlab/utils"
+	"github.com/charmbracelet/log"
 	api "github.com/weaveworks/ignite/pkg/apis/ignite"
 	meta "github.com/weaveworks/ignite/pkg/apis/meta/v1alpha1"
 	igniteConstants "github.com/weaveworks/ignite/pkg/constants"
@@ -25,6 +21,11 @@ import (
 	"github.com/weaveworks/ignite/pkg/providers/ignite"
 	igniteRuntimes "github.com/weaveworks/ignite/pkg/runtime"
 	"github.com/weaveworks/ignite/pkg/util"
+
+	"github.com/srl-labs/containerlab/clab/exec"
+	"github.com/srl-labs/containerlab/runtime"
+	"github.com/srl-labs/containerlab/types"
+	"github.com/srl-labs/containerlab/utils"
 )
 
 const (
@@ -140,7 +141,7 @@ func (c *IgniteRuntime) DeleteNet(ctx context.Context) error {
 
 // PullImage pulls the provided image name if it does not exist.
 // Ignite does ignore the pullPolicy though.
-func (*IgniteRuntime) PullImage(_ context.Context, imageName string, pullPolicy types.PullPolicyValue) error {
+func (*IgniteRuntime) PullImage(_ context.Context, imageName string, _ types.PullPolicyValue) error {
 	ociRef, err := meta.NewOCIImageRef(imageName)
 	if err != nil {
 		return fmt.Errorf("failed to parse OCI image ref %q: %s", imageName, err)
@@ -153,27 +154,31 @@ func (*IgniteRuntime) PullImage(_ context.Context, imageName string, pullPolicy 
 	return nil
 }
 
-func (c *IgniteRuntime) StartContainer(ctx context.Context, _ string, node *types.NodeConfig) (interface{}, error) {
+// StartContainer starts a container with the provided node configuration.
+// skipcq: GO-R1005
+func (c *IgniteRuntime) StartContainer(ctx context.Context, _ string, node runtime.Node) (interface{}, error) {
 	vm := c.baseVM.DeepCopy()
 
+	nodecfg := node.Config()
+
 	// updating the node RAM if it's set
-	if node.Memory != "" {
-		ram, err := meta.NewSizeFromString(node.Memory)
+	if nodecfg.Memory != "" {
+		ram, err := meta.NewSizeFromString(nodecfg.Memory)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse %q as memory value: %s", node.Memory, err)
+			return nil, fmt.Errorf("failed to parse %q as memory value: %s", nodecfg.Memory, err)
 		}
 		vm.Spec.Memory = ram
 	}
 
-	ociRef, err := meta.NewOCIImageRef(node.Sandbox)
+	ociRef, err := meta.NewOCIImageRef(nodecfg.Sandbox)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse OCI image ref %q: %s", node.Sandbox, err)
+		return nil, fmt.Errorf("failed to parse OCI image ref %q: %s", nodecfg.Sandbox, err)
 	}
 	vm.Spec.Sandbox.OCI = ociRef
 
-	ociRef, err = meta.NewOCIImageRef(node.Kernel)
+	ociRef, err = meta.NewOCIImageRef(nodecfg.Kernel)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse OCI image ref %q: %s", node.Kernel, err)
+		return nil, fmt.Errorf("failed to parse OCI image ref %q: %s", nodecfg.Kernel, err)
 	}
 	c.baseVM.Spec.Kernel.OCI = ociRef
 	k, err := operations.FindOrImportKernel(providers.Client, ociRef)
@@ -182,9 +187,9 @@ func (c *IgniteRuntime) StartContainer(ctx context.Context, _ string, node *type
 	}
 	vm.SetKernel(k)
 
-	ociRef, err = meta.NewOCIImageRef(node.Image)
+	ociRef, err = meta.NewOCIImageRef(nodecfg.Image)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse OCI image ref %q: %s", node.Image, err)
+		return nil, fmt.Errorf("failed to parse OCI image ref %q: %s", nodecfg.Image, err)
 	}
 	img, err := operations.FindOrImportImage(providers.Client, ociRef)
 	if err != nil {
@@ -192,12 +197,12 @@ func (c *IgniteRuntime) StartContainer(ctx context.Context, _ string, node *type
 	}
 	vm.SetImage(img)
 
-	vm.Name = node.LongName
-	vm.Labels = node.Labels
+	vm.Name = nodecfg.LongName
+	vm.Labels = nodecfg.Labels
 	metadata.SetNameAndUID(vm, providers.Client)
 
-	copyFiles := []api.FileMapping{}
-	for _, bind := range node.Binds {
+	var copyFiles []api.FileMapping
+	for _, bind := range nodecfg.Binds {
 		parts := strings.Split(bind, ":")
 		if len(parts) < 2 {
 			continue
@@ -211,9 +216,9 @@ func (c *IgniteRuntime) StartContainer(ctx context.Context, _ string, node *type
 	// Create udev rules to rename interfaces
 	var extraIntfs []string
 	var udevRules []string
-	for _, ep := range node.Endpoints {
-		extraIntfs = append(extraIntfs, ep.EndpointName)
-		udevRules = append(udevRules, fmt.Sprintf(udevRuleTemplate, ep.MAC, ep.EndpointName))
+	for _, ep := range node.GetEndpoints() {
+		extraIntfs = append(extraIntfs, ep.GetIfaceName())
+		udevRules = append(udevRules, fmt.Sprintf(udevRuleTemplate, ep.GetMac(), ep.GetIfaceName()))
 	}
 
 	udevFile, err := os.CreateTemp("/tmp", fmt.Sprintf("%s-udev", vm.Name))
@@ -222,7 +227,7 @@ func (c *IgniteRuntime) StartContainer(ctx context.Context, _ string, node *type
 	}
 	defer os.Remove(udevFile.Name())
 
-	if _, err := udevFile.Write([]byte(strings.Join(udevRules, "\n") + "\n")); err != nil {
+	if _, err := udevFile.WriteString(strings.Join(udevRules, "\n") + "\n"); err != nil {
 		return nil, err
 	}
 	if err := udevFile.Close(); err != nil {
@@ -262,12 +267,11 @@ func (c *IgniteRuntime) StartContainer(ctx context.Context, _ string, node *type
 		return nil, err
 	}
 
-	node.NSPath, err = c.GetNSPath(ctx, vm.PrefixedID())
+	nspath, err := c.ctrRuntime.GetNSPath(ctx, vm.PrefixedID())
 	if err != nil {
 		return nil, err
 	}
-
-	return vmChans, utils.LinkContainerNS(node.NSPath, node.LongName)
+	return vmChans, utils.LinkContainerNS(nspath, nodecfg.LongName)
 }
 
 func (*IgniteRuntime) CreateContainer(_ context.Context, node *types.NodeConfig) (string, error) {
@@ -275,7 +279,7 @@ func (*IgniteRuntime) CreateContainer(_ context.Context, node *types.NodeConfig)
 	return node.LongName, nil
 }
 
-func (i *IgniteRuntime) PauseContainer(_ context.Context, cID string) error {
+func (*IgniteRuntime) PauseContainer(_ context.Context, cID string) error {
 	pid, err := utils.ContainerNSToPID(cID)
 	if err != nil {
 		return err
@@ -284,7 +288,7 @@ func (i *IgniteRuntime) PauseContainer(_ context.Context, cID string) error {
 	return utils.PauseProcessGroup(pid)
 }
 
-func (i *IgniteRuntime) UnpauseContainer(_ context.Context, cID string) error {
+func (*IgniteRuntime) UnpauseContainer(_ context.Context, cID string) error {
 	pid, err := utils.ContainerNSToPID(cID)
 	if err != nil {
 		return err
@@ -301,11 +305,13 @@ func (*IgniteRuntime) StopContainer(_ context.Context, _ string) error {
 func (c *IgniteRuntime) ListContainers(_ context.Context, gfilters []*types.GenericFilter) ([]runtime.GenericContainer, error) {
 	var result []runtime.GenericContainer
 
-	var labelStrings []string
+	var metaFilters []string
 	for _, gf := range gfilters {
 		if gf.FilterType == "label" && gf.Operator == "=" {
-			labelStrings = append(labelStrings, fmt.Sprintf(
+			metaFilters = append(metaFilters, fmt.Sprintf(
 				"{{.ObjectMeta.Labels.%s}}=%s", gf.Field, gf.Match))
+		} else if gf.FilterType == "name" {
+			metaFilters = append(metaFilters, fmt.Sprintf("{{.ObjectMeta.Name}}=%s", gf.Match))
 		}
 	}
 
@@ -314,17 +320,17 @@ func (c *IgniteRuntime) ListContainers(_ context.Context, gfilters []*types.Gene
 		return result, fmt.Errorf("failed to list all VMs: %s", err)
 	}
 
-	if len(labelStrings) < 1 {
+	if len(metaFilters) < 1 {
 		return c.produceGenericContainerList(allVMs)
 	}
 
-	metaFilter := strings.Join(labelStrings, ",")
+	metaFilter := strings.Join(metaFilters, ",")
 	filters, err := filter.GenerateMultipleMetadataFiltering(metaFilter)
 	if err != nil {
 		return result, fmt.Errorf("failed to generate filters: %s", err)
 	}
 
-	filteredVMs := []*api.VM{}
+	var filteredVMs []*api.VM
 	for _, vm := range allVMs {
 		isExpected, err := filters.AreExpected(vm)
 		if err != nil {
@@ -393,12 +399,12 @@ func (ir *IgniteRuntime) produceGenericContainerList(input []*api.VM) ([]runtime
 	return result, nil
 }
 
-func (c *IgniteRuntime) GetNSPath(ctx context.Context, ctrId string) (string, error) {
-	result, err := c.ctrRuntime.GetNSPath(ctx, ctrId)
+func (c *IgniteRuntime) GetNSPath(ctx context.Context, vmName string) (string, error) {
+	vm, err := providers.Client.VMs().Find(filter.NewVMFilter(vmName))
 	if err != nil {
 		return "", err
 	}
-	return result, nil
+	return c.ctrRuntime.GetNSPath(ctx, vm.PrefixedID())
 }
 
 func (*IgniteRuntime) Exec(_ context.Context, _ string, _ *exec.ExecCmd) (*exec.ExecResult, error) {
@@ -444,12 +450,12 @@ func (c *IgniteRuntime) DeleteContainer(ctx context.Context, containerID string)
 
 // GetHostsPath returns fs path to a file which is mounted as /etc/hosts into a given container
 // no-op for ignite.
-func (c *IgniteRuntime) GetHostsPath(context.Context, string) (string, error) {
+func (*IgniteRuntime) GetHostsPath(context.Context, string) (string, error) {
 	return "", nil
 }
 
 // GetContainerStatus retrieves the ContainerStatus of the named container.
-func (c *IgniteRuntime) GetContainerStatus(_ context.Context, containerID string) runtime.ContainerStatus {
+func (*IgniteRuntime) GetContainerStatus(_ context.Context, containerID string) runtime.ContainerStatus {
 	vm, err := providers.Client.VMs().Find(filter.NewVMFilter(containerID))
 	if err != nil {
 		return runtime.NotFound
@@ -458,4 +464,24 @@ func (c *IgniteRuntime) GetContainerStatus(_ context.Context, containerID string
 		return runtime.Running
 	}
 	return runtime.Stopped
+}
+
+// IsHealthy returns true is the container is reported as being healthy, false otherwise.
+func (*IgniteRuntime) IsHealthy(_ context.Context, _ string) (bool, error) {
+	log.Errorf("function GetContainerHealth(...) not implemented in the Containerlab IgniteRuntime")
+	return true, nil
+}
+
+func (*IgniteRuntime) WriteToStdinNoWait(ctx context.Context, cID string, data []byte) error {
+	log.Infof("WriteToStdinNoWait is not yet implemented for Ignite runtime")
+	return nil
+}
+
+func (*IgniteRuntime) CheckConnection(_ context.Context) error {
+	// For now, we only check that KVM path exists and assume Ignite works otherwise
+	if _, err := os.Stat(kvmPath); err != nil {
+		return fmt.Errorf("cannot find %q: %s", kvmPath, err)
+	}
+
+	return nil
 }

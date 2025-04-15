@@ -7,10 +7,9 @@ package ext_container
 import (
 	"context"
 
-	"github.com/pkg/errors"
-
 	"github.com/srl-labs/containerlab/labels"
 	"github.com/srl-labs/containerlab/nodes"
+	"github.com/srl-labs/containerlab/nodes/state"
 	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/types"
 )
@@ -34,6 +33,10 @@ func (s *extcont) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 	for _, o := range opts {
 		o(s)
 	}
+	// Indicate that the pre-deployment UniquenessCheck is to be skipped.
+	// Since we would stop deployment on pre-existing containers.
+	s.Cfg.SkipUniquenessCheck = true
+	s.Cfg.LongName = s.Cfg.ShortName
 	return nil
 }
 
@@ -44,13 +47,7 @@ func (e *extcont) Deploy(ctx context.Context, _ *nodes.DeployParams) error {
 		return err
 	}
 
-	// request nspath from runtime
-	nspath, err := e.Runtime.GetNSPath(ctx, e.Cfg.ShortName)
-	if err != nil {
-		return errors.Wrap(err, "reading external container namespace path")
-	}
-	// set nspath in node config
-	e.Cfg.NSPath = nspath
+	e.SetState(state.Deployed)
 
 	return nil
 }

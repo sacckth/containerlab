@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/srl-labs/containerlab/types"
 	"golang.org/x/crypto/ssh"
 )
@@ -86,7 +86,7 @@ func HostKeyCallback(callback ...ssh.HostKeyCallback) SSHTransportOption {
 
 func NewSSHTransport(node *types.NodeConfig, options ...SSHTransportOption) (*SSHTransport, error) {
 	switch node.Kind {
-	case "vr-sros", "srl":
+	case "vr-sros", "srl", "nokia_sros", "nokia_srlinux":
 		c := &SSHTransport{}
 		c.SSHConfig = &ssh.ClientConfig{}
 
@@ -99,9 +99,9 @@ func NewSSHTransport(node *types.NodeConfig, options ...SSHTransportOption) (*SS
 		}
 
 		switch node.Kind {
-		case "vr-sros":
+		case "vr-sros", "nokia_sros":
 			c.K = &VrSrosSSHKind{}
-		case "srl":
+		case "srl", "nokia_srlinux":
 			c.K = &SrlSSHKind{}
 		}
 		return c, nil
@@ -111,12 +111,12 @@ func NewSSHTransport(node *types.NodeConfig, options ...SSHTransportOption) (*SS
 
 // InChannel creates the channel reading the SSH connection.
 //
-// The first prompt is saved in LoginMessages
+// # The first prompt is saved in LoginMessages
 //
-// - The channel read the SSH session, splits on PromptChar
-// - Uses SSHKind's PromptParse to split the received data in *result* and *prompt* parts
-//   (if no valid prompt was found, prompt will simply be empty and result contain all the data)
-// - Emit data.
+//   - The channel read the SSH session, splits on PromptChar
+//   - Uses SSHKind's PromptParse to split the received data in *result* and *prompt* parts
+//     (if no valid prompt was found, prompt will simply be empty and result contain all the data)
+//   - Emit data.
 func (t *SSHTransport) InChannel() {
 	// Ensure we have a working channel
 	t.in = make(chan SSHReply)
@@ -370,10 +370,11 @@ func (ses *SSHSession) Close() {
 }
 
 // LogString will include the entire SSHReply
-//   Each field will be prefixed by a character.
-//   # - command sent
-//   | - result received
-//   ? - prompt part of the result
+//
+//	Each field will be prefixed by a character.
+//	# - command sent
+//	| - result received
+//	? - prompt part of the result
 func (r *SSHReply) LogString(node string, linefeed, debug bool) string { // skipcq: RVV-A0005
 	ind := 12 + len(node)
 	prefix := "\n" + strings.Repeat(" ", ind)

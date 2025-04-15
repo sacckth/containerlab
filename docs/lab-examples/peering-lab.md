@@ -14,7 +14,7 @@ Internet eXchange Points are the glue that connects the Internet. They are the p
 
 Each of these topics is a whole body of knowledge on its own and various Internet exchange consortiums have published best practices and guidelines to help IXP operators and their members to configure their networks properly.
 
-The guidelines and current best practices are best to be practiced in a lab environment. And with this thought in mind we present containerlab users with this hands-on lab simulating an IXP with Route Servers and two peering memebers.
+The guidelines and current best practices are best to be reinforced in a lab environment. And with this thought in mind, we present containerlab users with this hands-on lab simulating an IXP with Route Servers and peering members.
 
 ## Lab summary
 
@@ -29,7 +29,7 @@ The guidelines and current best practices are best to be practiced in a lab envi
 
 ## Prerequisites
 
-Since containerlab uses containers as the nodes of a lab, Docker engine has to be [installed](../install.md#pre-requisites) on the host system first.
+Since containerlab uses containers as the nodes of a lab, the Docker engine has to be [installed](../install.md#pre-requisites) on the host system first.
 
 ## Lab topology
 
@@ -148,6 +148,9 @@ The basic configuration that is captured in the startup configuration files cont
 
 Nokia SR OS startup configuration file is provided in the form of a CLI-styled configuration blob that is captured in the [sros-partial.cfg][sros-partial-cfg]. The statements in this config file are applied when the node is started and ready to accept CLI commands.
 
+!!!tip
+    Throughout this lab we will introduce and explain different BGP features and provide the relevant configuration snippets. As it takes time to put in writing all the features, ref links, and stories around them, we created a configuration cheat sheet that contains a condensed version of the BGP peering configuration snippets for SR OS. The cheat sheet is available at [sajusal/sros-peering](https://github.com/sajusal/sros-peering/blob/main/README.md) repository and should help you to get started with the lab in a self-exploration mode.
+
 ### FRR
 
 FRR configuration is split between the two files:
@@ -182,10 +185,10 @@ Upon successful deployment, containerlab presents the lab summary table that con
 +---+----------------+--------------+-------------------------------+---------------+---------+----------------+----------------------+
 | # |      Name      | Container ID |             Image             |     Kind      |  State  |  IPv4 Address  |     IPv6 Address     |
 +---+----------------+--------------+-------------------------------+---------------+---------+----------------+----------------------+
-| 1 | clab-ixp-peer1 | c9f5301899fb | sros:23.3.R1                  | vr-nokia_sros | running | 172.20.20.5/24 | 2001:172:20:20::5/64 |
-| 2 | clab-ixp-peer2 | 83da54ce9f7b | quay.io/frrouting/frr:8.4.1   | linux         | running | 172.20.20.3/24 | 2001:172:20:20::3/64 |
-| 3 | clab-ixp-rs1   | 701ee906f03f | quay.io/openbgpd/openbgpd:7.9 | linux         | running | 172.20.20.4/24 | 2001:172:20:20::4/64 |
-| 4 | clab-ixp-rs2   | 7de1a2f30d52 | ghcr.io/srl-labs/bird:2.13    | linux         | running | 172.20.20.2/24 | 2001:172:20:20::2/64 |
+| 1 | clab-ixp-peer1 | c9f5301899fb | sros:23.3.R1                  | vr-nokia_sros | running | 172.20.20.5/24 | 3fff:172:20:20::5/64 |
+| 2 | clab-ixp-peer2 | 83da54ce9f7b | quay.io/frrouting/frr:8.4.1   | linux         | running | 172.20.20.3/24 | 3fff:172:20:20::3/64 |
+| 3 | clab-ixp-rs1   | 701ee906f03f | quay.io/openbgpd/openbgpd:7.9 | linux         | running | 172.20.20.4/24 | 3fff:172:20:20::4/64 |
+| 4 | clab-ixp-rs2   | 7de1a2f30d52 | ghcr.io/srl-labs/bird:2.13    | linux         | running | 172.20.20.2/24 | 3fff:172:20:20::2/64 |
 +---+----------------+--------------+-------------------------------+---------------+---------+----------------+----------------------+
 ```
 
@@ -193,17 +196,17 @@ This table contains vital information about the deployed nodes, such as the name
 
 ### Inspecting the lab
 
-At any point in time, containerlab users can refresh themselves on what is currently deployed in the lab environment by using the [`containerlab inspect`](../cmd/inspect.md) command:
+At any point in time, containerlab users can refresh themselves on what is currently deployed in the lab environment by using the [`containerlab inspect`](../cmd/inspect/index.md) command:
 
 ```
 $ containerlab inspect --all
 +---+--------------+----------+----------------+--------------+-------------------------------+---------------+---------+----------------+----------------------+
 | # |  Topo Path   | Lab Name |      Name      | Container ID |             Image             |     Kind      |  State  |  IPv4 Address  |     IPv6 Address     |
 +---+--------------+----------+----------------+--------------+-------------------------------+---------------+---------+----------------+----------------------+
-| 1 | ixp.clab.yml | ixp      | clab-ixp-peer1 | c9f5301899fb | sros:23.3.R1                  | vr-nokia_sros | running | 172.20.20.5/24 | 2001:172:20:20::5/64 |
-| 2 |              |          | clab-ixp-peer2 | 83da54ce9f7b | quay.io/frrouting/frr:8.4.1   | linux         | running | 172.20.20.3/24 | 2001:172:20:20::3/64 |
-| 3 |              |          | clab-ixp-rs1   | 701ee906f03f | quay.io/openbgpd/openbgpd:7.9 | linux         | running | 172.20.20.4/24 | 2001:172:20:20::4/64 |
-| 4 |              |          | clab-ixp-rs2   | 7de1a2f30d52 | ghcr.io/srl-labs/bird:2.13    | linux         | running | 172.20.20.2/24 | 2001:172:20:20::2/64 |
+| 1 | ixp.clab.yml | ixp      | clab-ixp-peer1 | c9f5301899fb | sros:23.3.R1                  | vr-nokia_sros | running | 172.20.20.5/24 | 3fff:172:20:20::5/64 |
+| 2 |              |          | clab-ixp-peer2 | 83da54ce9f7b | quay.io/frrouting/frr:8.4.1   | linux         | running | 172.20.20.3/24 | 3fff:172:20:20::3/64 |
+| 3 |              |          | clab-ixp-rs1   | 701ee906f03f | quay.io/openbgpd/openbgpd:7.9 | linux         | running | 172.20.20.4/24 | 3fff:172:20:20::4/64 |
+| 4 |              |          | clab-ixp-rs2   | 7de1a2f30d52 | ghcr.io/srl-labs/bird:2.13    | linux         | running | 172.20.20.2/24 | 3fff:172:20:20::2/64 |
 +---+--------------+----------+----------------+--------------+-------------------------------+---------------+---------+----------------+----------------------+
 ```
 
@@ -377,7 +380,7 @@ The following resources were used to create this lab:
 [obgpd-container]: https://quay.io/openbgpd/openbgpd:7.9
 [rd-twitter]: https://twitter.com/ntdvps
 [rd-linkedin]: https://www.linkedin.com/in/romandodin/
-[frr-container]: https://quay.io/openbgpd/openbgpd:7.9
+[frr-container]: https://quay.io/repository/frrouting/frr:8.4.1
 [lab-file]: https://github.com/hellt/sros-frr-ixp-lab/blob/euro-ix/ixp.clab.yml
 [sros-partial-cfg]: https://github.com/hellt/sros-frr-ixp-lab/blob/euro-ix/configs/sros.partial.cfg
 [frr-conf-basic]: https://github.com/hellt/sros-frr-ixp-lab/blob/euro-ix/configs/frr.conf

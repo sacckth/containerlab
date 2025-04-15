@@ -7,17 +7,16 @@ package host
 import (
 	"bytes"
 	"context"
-	"os"
-	"path/filepath"
-	"regexp"
 
 	osexec "os/exec"
 
 	cExec "github.com/srl-labs/containerlab/clab/exec"
 	"github.com/srl-labs/containerlab/labels"
 	"github.com/srl-labs/containerlab/nodes"
+	"github.com/srl-labs/containerlab/nodes/state"
 	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/types"
+	"github.com/srl-labs/containerlab/utils"
 )
 
 var kindnames = []string{"host"}
@@ -44,40 +43,23 @@ func (n *host) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 	n.Cfg.IsRootNamespaceBased = true
 	return nil
 }
-func (*host) Deploy(_ context.Context, _ *nodes.DeployParams) error { return nil }
-func (*host) GetImages(_ context.Context) map[string]string         { return map[string]string{} }
-func (*host) PullImage(_ context.Context) error                     { return nil }
-func (*host) Delete(_ context.Context) error                        { return nil }
-func (*host) WithMgmtNet(*types.MgmtNet)                            {}
+
+func (n *host) Deploy(_ context.Context, _ *nodes.DeployParams) error {
+	n.SetState(state.Deployed)
+	return nil
+}
+
+func (*host) GetImages(_ context.Context) map[string]string { return map[string]string{} }
+func (*host) PullImage(_ context.Context) error             { return nil }
+func (*host) Delete(_ context.Context) error                { return nil }
+func (*host) WithMgmtNet(*types.MgmtNet)                    {}
 
 // UpdateConfigWithRuntimeInfo is a noop for hosts.
 func (*host) UpdateConfigWithRuntimeInfo(_ context.Context) error { return nil }
 
-// getOSRelease returns the OS release of the host by inspecting /etc/*-release.
-func getOSRelease() string {
-	image := "N/A"
-
-	matches, err := filepath.Glob("/etc/*-release")
-	if err != nil {
-		return image
-	}
-	dat, err := os.ReadFile(matches[0])
-	if err != nil {
-		return image
-	}
-	// DISTRIB_DESCRIPTION exists in lsb-release, but not os-release.
-	// the lsb-release is coming first in the glob, so it works.
-	re := regexp.MustCompile(`DISTRIB_DESCRIPTION="(.*)"`)
-
-	regexres := re.FindSubmatch(dat)
-
-	return string(regexres[1])
-}
-
 // GetContainers returns a basic skeleton of a container to enable graphing of hosts kinds.
-func (*host) GetContainers(_ context.Context) ([]runtime.GenericContainer, error) {
-
-	image := getOSRelease()
+func (h *host) GetContainers(_ context.Context) ([]runtime.GenericContainer, error) {
+	image := utils.GetOSRelease()
 
 	return []runtime.GenericContainer{
 		{
@@ -92,18 +74,22 @@ func (*host) GetContainers(_ context.Context) ([]runtime.GenericContainer, error
 			Status: "running",
 			NetworkSettings: runtime.GenericMgmtIPs{
 				IPv4addr: "",
-				//IPv4pLen: 0,
+				// IPv4pLen: 0,
 				IPv4Gw:   "",
 				IPv6addr: "",
-				//IPv6pLen: 0,
+				// IPv6pLen: 0,
 				IPv6Gw: "",
 			},
 		},
 	}, nil
 }
 
-// RunExec runs commands on the container host
+// RunExec runs commands on the container host.
 func (*host) RunExec(ctx context.Context, e *cExec.ExecCmd) (*cExec.ExecResult, error) {
+	return RunExec(ctx, e)
+}
+
+func RunExec(ctx context.Context, e *cExec.ExecCmd) (*cExec.ExecResult, error) {
 	// retireve the command with its arguments
 	command := e.GetCmd()
 

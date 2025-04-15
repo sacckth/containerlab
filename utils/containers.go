@@ -2,14 +2,9 @@ package utils
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-)
-
-const (
-	cniBin = "/opt/cni/bin"
 )
 
 // GetCanonicalImageName produces a canonical image name.
@@ -19,6 +14,7 @@ func GetCanonicalImageName(imageName string) string {
 	//    alpine == docker.io/library/alpine:latest
 	//    foo/bar == docker.io/foo/bar:latest
 	//    foo.bar/baz == foo.bar/bar:latest
+	//    localhost/foo:bar == localhost/foo:bar
 	//    docker.elastic.co/elasticsearch/elasticsearch == docker.elastic.co/elasticsearch/elasticsearch:latest
 	canonicalImageName := imageName
 	slashCount := strings.Count(imageName, "/")
@@ -32,6 +28,9 @@ func GetCanonicalImageName(imageName string) string {
 		// case of foo.bar/baz
 		if strings.Contains(nameSplit[0], ".") {
 			canonicalImageName = imageName
+		} else if strings.Contains(nameSplit[0], "localhost") {
+			// case of localhost/foo:bar - podman prefixes local images with "localhost"
+			canonicalImageName = imageName
 		} else {
 			canonicalImageName = "docker.io/" + imageName
 		}
@@ -42,15 +41,6 @@ func GetCanonicalImageName(imageName string) string {
 	}
 
 	return canonicalImageName
-}
-
-func GetCNIBinaryPath() string {
-	var cniPath string
-	var ok bool
-	if cniPath, ok = os.LookupEnv("CNI_BIN"); !ok {
-		cniPath = cniBin
-	}
-	return cniPath
 }
 
 // ContainerNSToPID resolves the name of a container via
@@ -69,4 +59,20 @@ func ContainerNSToPID(cID string) (int, error) {
 		return 0, fmt.Errorf("error converting the string part of the namespace link to int")
 	}
 	return pid, nil
+}
+
+// DestinationBindMountExists checks if a bind mount destination exists in a list of bind mounts.
+// The bind options are not matched, only the destination is matched.
+// The binds are expected to be in the format of "source:destination[:options]".
+func DestinationBindMountExists(binds []string, dest string) bool {
+	for _, b := range binds {
+		parts := strings.Split(b, ":")
+		if len(parts) >= 2 {
+			// The destination is the second part
+			if parts[1] == dest {
+				return true
+			}
+		}
+	}
+	return false
 }

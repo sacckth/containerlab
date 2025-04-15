@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/srl-labs/containerlab/netconf"
 	"github.com/srl-labs/containerlab/nodes"
 	"github.com/srl-labs/containerlab/types"
@@ -29,13 +29,21 @@ var (
 
 const (
 	scrapliPlatformName = "cisco_iosxr"
+	NapalmPlatformName  = "iosxr"
 )
 
 // Register registers the node in the NodeRegistry.
 func Register(r *nodes.NodeRegistry) {
+	platformOpts := &nodes.PlatformAttrs{
+		ScrapliPlatformName: scrapliPlatformName,
+		NapalmPlatformName:  NapalmPlatformName,
+	}
+
+	nrea := nodes.NewNodeRegistryEntryAttributes(defaultCredentials, nil, platformOpts)
+
 	r.Register(kindnames, func() nodes.Node {
 		return new(c8000)
-	}, defaultCredentials)
+	}, nrea)
 }
 
 type c8000 struct {
@@ -117,9 +125,10 @@ func (n *c8000) create8000Files(_ context.Context) error {
 // CheckInterfaceName checks if a name of the interface referenced in the topology file correct.
 func (n *c8000) CheckInterfaceName() error {
 	ifRe := regexp.MustCompile(`^(Hu|FH)0_0_0_\d+$`)
-	for _, e := range n.Config().Endpoints {
-		if !ifRe.MatchString(e.EndpointName) {
-			return fmt.Errorf("cisco 8000 interface name %q doesn't match the required pattern. Cisco 8000 interfaces should be named as Hu0_0_0_X (100G interfaces) or FH0_0_0_X (400G interfaces) where X is the interface number", e.EndpointName)
+
+	for _, e := range n.Endpoints {
+		if !ifRe.MatchString(e.GetIfaceName()) {
+			return fmt.Errorf("cisco 8000 interface name %q doesn't match the required pattern. Cisco 8000 interfaces should be named as Hu0_0_0_X (100G interfaces) or FH0_0_0_X (400G interfaces) where X is the interface number", e.GetIfaceName())
 		}
 	}
 

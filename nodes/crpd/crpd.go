@@ -10,8 +10,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/srl-labs/containerlab/clab/exec"
 	"github.com/srl-labs/containerlab/nodes"
 	"github.com/srl-labs/containerlab/types"
@@ -19,11 +20,20 @@ import (
 )
 
 const (
-	licDir = "/config/license/safenet"
+
+	// licDir is the directory where Junos 22+ expects to find the license file.
+	licDir  = "/config/license"
+	licFile = "license.lic"
+
+	generateable     = true
+	generateIfFormat = "eth%d"
+
+	scrapliPlatformName = "juniper_junos"
+	NapalmPlatformName  = "junos"
 )
 
 var (
-	kindnames = []string{"crpd", "juniper_crpd"}
+	kindNames = []string{"crpd", "juniper_crpd"}
 	//go:embed crpd.cfg
 	defaultCfgTemplate string
 
@@ -38,9 +48,17 @@ var (
 
 // Register registers the node in the NodeRegistry.
 func Register(r *nodes.NodeRegistry) {
-	r.Register(kindnames, func() nodes.Node {
+	generateNodeAttributes := nodes.NewGenerateNodeAttributes(generateable, generateIfFormat)
+	platformOpts := &nodes.PlatformAttrs{
+		ScrapliPlatformName: scrapliPlatformName,
+		NapalmPlatformName:  NapalmPlatformName,
+	}
+
+	nrea := nodes.NewNodeRegistryEntryAttributes(defaultCredentials, generateNodeAttributes, platformOpts)
+
+	r.Register(kindNames, func() nodes.Node {
 		return new(crpd)
-	}, defaultCredentials)
+	}, nrea)
 }
 
 type crpd struct {
@@ -61,7 +79,7 @@ func (s *crpd) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 		fmt.Sprint(filepath.Join(s.Cfg.LabDir, "config"), ":/config"),
 		fmt.Sprint(filepath.Join(s.Cfg.LabDir, "log"), ":/var/log"),
 		// mount sshd_config
-		fmt.Sprint(filepath.Join(s.Cfg.LabDir, "config/sshd_config"), ":/etc/ssh/sshd_config"),
+		fmt.Sprint(filepath.Join(s.Cfg.LabDir, "config", "sshd_config"), ":/etc/ssh/sshd_config"),
 	)
 
 	return nil
@@ -86,7 +104,27 @@ func (s *crpd) PostDeploy(ctx context.Context, _ *nodes.PostDeployParams) error 
 	}
 
 	if len(execResult.GetStdErrString()) > 0 {
-		return fmt.Errorf("crpd post-deploy failed: %s", execResult.GetStdErrString())
+		// If "ssh: unrecognized service" appears in the output we are probably
+		// on Junos >=23.4, where the SSH service was renamed to junos-ssh and
+		// is fully managed by MGD
+		if strings.Contains(execResult.GetStdErrString(), "ssh: unrecognized service") {
+			log.Debug(`Caught "ssh: unrecognized service" error, ignoring`)
+		} else {
+			return fmt.Errorf("crpd post-deploy sshd restart failed: %s", execResult.GetStdErrString())
+		}
+	}
+
+	if s.Config().License != "" {
+		cmd, _ = exec.NewExecCmdFromString(fmt.Sprintf("cli request system license add %s", filepath.Join(licDir, licFile)))
+		execResult, err = s.RunExec(ctx, cmd)
+		if err != nil {
+			return err
+		}
+
+		if len(execResult.GetStdErrString()) > 0 {
+			return fmt.Errorf("crpd post-deploy license add failed: %s", execResult.GetStdErrString())
+		}
+		log.Debugf("crpd post-deploy license add result: %s", execResult.GetStdOutString())
 	}
 
 	return err
@@ -121,7 +159,7 @@ func createCRPDFiles(node nodes.Node) error {
 	utils.CreateDirectory(filepath.Join(nodeCfg.LabDir, "log"), 0777)
 
 	// copy crpd config from default template or user-provided conf file
-	cfg := filepath.Join(nodeCfg.LabDir, "/config/juniper.conf")
+	cfg := filepath.Join(nodeCfg.LabDir, "config", "juniper.conf")
 	var cfgTemplate string
 
 	if nodeCfg.StartupConfig != "" {
@@ -142,7 +180,10 @@ func createCRPDFiles(node nodes.Node) error {
 	}
 
 	// write crpd sshd conf file to crpd node dir
-	dst := filepath.Join(nodeCfg.LabDir, "/config/sshd_config")
+	// Note: this only applies to older versions of Junos (before 23). In later
+	// versions the config file is placed in /var/etc/sshd_config and is owned
+	// by MGD.
+	dst := filepath.Join(nodeCfg.LabDir, "config", "sshd_config")
 	err = utils.CreateFile(dst, sshdCfg)
 	if err != nil {
 		return fmt.Errorf("failed to write sshd_config file %v", err)
@@ -152,7 +193,7 @@ func createCRPDFiles(node nodes.Node) error {
 	if nodeCfg.License != "" {
 		// copy license file to node specific lab directory
 		src := nodeCfg.License
-		dst = filepath.Join(nodeCfg.LabDir, licDir, "junos_sfnt.lic")
+		dst = filepath.Join(nodeCfg.LabDir, licDir, licFile)
 
 		if err := os.MkdirAll(filepath.Join(nodeCfg.LabDir, licDir), 0777); err != nil { // skipcq: GSC-G301
 			return err

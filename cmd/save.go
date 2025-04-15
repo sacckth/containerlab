@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"sync"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 	"github.com/srl-labs/containerlab/clab"
+	"github.com/srl-labs/containerlab/cmd/common"
+	"github.com/srl-labs/containerlab/links"
 	"github.com/srl-labs/containerlab/nodes"
 	"github.com/srl-labs/containerlab/runtime"
 )
@@ -22,25 +24,29 @@ var saveCmd = &cobra.Command{
 	Short: "save containers configuration",
 	Long: `save performs a configuration save. The exact command that is used to save the config depends on the node kind.
 Refer to the https://containerlab.dev/cmd/save/ documentation to see the exact command used per node's kind`,
-	PreRunE: sudoCheck,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if name == "" && topo == "" {
+	RunE: func(_ *cobra.Command, _ []string) error {
+		if common.Name == "" && common.Topo == "" {
 			return fmt.Errorf("provide topology file path  with --topo flag")
 		}
 		opts := []clab.ClabOption{
-			clab.WithTimeout(timeout),
-			clab.WithTopoFile(topo, varsFile),
-			clab.WithNodeFilter(nodeFilter),
-			clab.WithRuntime(rt,
+			clab.WithTimeout(common.Timeout),
+			clab.WithTopoPath(common.Topo, common.VarsFile),
+			clab.WithNodeFilter(common.NodeFilter),
+			clab.WithRuntime(common.Runtime,
 				&runtime.RuntimeConfig{
-					Debug:            debug,
-					Timeout:          timeout,
-					GracefulShutdown: graceful,
+					Debug:            common.Debug,
+					Timeout:          common.Timeout,
+					GracefulShutdown: common.Graceful,
 				},
 			),
-			clab.WithDebug(debug),
+			clab.WithDebug(common.Debug),
 		}
 		c, err := clab.NewContainerLab(opts...)
+		if err != nil {
+			return err
+		}
+
+		err = links.SetMgmtNetUnderlyingBridge(c.Config.Mgmt.Bridge)
 		if err != nil {
 			return err
 		}
@@ -67,7 +73,7 @@ Refer to the https://containerlab.dev/cmd/save/ documentation to see the exact c
 }
 
 func init() {
-	saveCmd.Flags().StringSliceVarP(&nodeFilter, "node-filter", "", []string{},
+	saveCmd.Flags().StringSliceVarP(&common.NodeFilter, "node-filter", "", []string{},
 		"comma separated list of nodes to include")
 	rootCmd.AddCommand(saveCmd)
 }

@@ -11,6 +11,7 @@ The exact command that performs configuration save depends on a given kind. The 
 | **Nokia SR Linux** | `sr_cli -d tools system configuration save` |                                                         |
 | **Nokia SR OS**    |                                             | delivered via netconf RPC `copy-config running startup` |
 | **Arista cEOS**    | `Cli -p 15 -c wr`                           |                                                         |
+| **Cisco IOL**      | `write memory`                              |                                                         |
 
 ### Usage
 
@@ -20,9 +21,13 @@ The exact command that performs configuration save depends on a given kind. The 
 
 #### topology | name
 
-With the global `--topo | -t` or `--name | -n` flag a user specifies from which lab to take the containers and perform the save configuration task.
+With the global `--topo | -t` flag a user sets the path to the topology definition file that will be used to spin up a lab.
 
-When the topology file flag is omitted, containerlab will try to find the matching file name by looking at the current working directory. If a single file is found, it will be used.
+When the topology path refers to a directory, containerlab will look for a file with `.clab.yml` extension in that directory and use it as a topology definition file.
+
+When the topology file flag is omitted, containerlab will try to find the matching file name by looking at the current working directory.
+
+If more than one file is found for directory-based path or when the flag is omitted entirely, containerlab will fail with an error.
 
 #### node-filter
 

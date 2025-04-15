@@ -6,18 +6,15 @@ package clab
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
 
-	"github.com/a8m/envsubst"
-	"github.com/hairyhenderson/gomplate/v3"
-	"github.com/hairyhenderson/gomplate/v3/data"
+	"github.com/hellt/envsubst"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/srl-labs/containerlab/types"
 	"github.com/srl-labs/containerlab/utils"
 	"gopkg.in/yaml.v2"
@@ -27,9 +24,10 @@ const (
 	varFileSuffix = "_vars"
 )
 
-// GetTopology parses the topology file into c.Conf structure
+// LoadTopologyFromFile loads a topology by the topo file path
+// parses the topology file into c.Conf structure
 // as well as populates the TopoFile structure with the topology file related information.
-func (c *CLab) GetTopology(topo, varsFile string) error {
+func (c *CLab) LoadTopologyFromFile(topo, varsFile string) error {
 	var err error
 
 	c.TopoPaths, err = types.NewTopoPaths(topo)
@@ -38,8 +36,7 @@ func (c *CLab) GetTopology(topo, varsFile string) error {
 	}
 
 	// load the topology file/template
-	topologyTemplate, err := template.New(c.TopoPaths.TopologyFilenameBase()).
-		Funcs(gomplate.CreateFuncs(context.Background(), new(data.Data))).
+	topologyTemplate, err := template.New(c.TopoPaths.TopologyFilenameBase()).Funcs(utils.CreateFuncs()).
 		ParseFiles(c.TopoPaths.TopologyFilenameAbsPath())
 	if err != nil {
 		return err
@@ -71,7 +68,9 @@ func (c *CLab) GetTopology(topo, varsFile string) error {
 	log.Debugf("topology:\n%s\n", buf.String())
 
 	// expand env vars if any
-	yamlFile, err := envsubst.Bytes(buf.Bytes())
+	// do not replace vars initialized with defaults
+	// and do not replace vars that are not set
+	yamlFile, err := envsubst.BytesRestrictedNoReplace(buf.Bytes(), false, false, true, true)
 	if err != nil {
 		return err
 	}
@@ -99,7 +98,7 @@ func readTemplateVariables(topo, varsFile string) (interface{}, error) {
 			case err != nil:
 				return nil, err
 			}
-			// file with current extention found, go read it.
+			// file with current extension found, go read it.
 			goto READFILE
 		}
 		// no var file found, assume the topology is not a template

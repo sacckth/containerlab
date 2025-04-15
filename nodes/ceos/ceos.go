@@ -17,7 +17,7 @@ import (
 	"regexp"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/charmbracelet/log"
 	"github.com/srl-labs/containerlab/clab/exec"
 	"github.com/srl-labs/containerlab/nodes"
 	"github.com/srl-labs/containerlab/types"
@@ -26,10 +26,15 @@ import (
 
 const (
 	ifWaitScriptContainerPath = "/mnt/flash/if-wait.sh"
+	generateable              = true
+	generateIfFormat          = "eth%d"
+
+	scrapliPlatformName = "arista_eos"
+	NapalmPlatformName  = "eos"
 )
 
 var (
-	kindnames = []string{"ceos", "arista_ceos"}
+	KindNames = []string{"ceos", "arista_ceos"}
 	// defined env vars for the ceos.
 	ceosEnv = map[string]string{
 		"CEOS":                                "1",
@@ -52,9 +57,17 @@ var (
 
 // Register registers the node in the NodeRegistry.
 func Register(r *nodes.NodeRegistry) {
-	r.Register(kindnames, func() nodes.Node {
+	generateNodeAttributes := nodes.NewGenerateNodeAttributes(generateable, generateIfFormat)
+	platformAttrs := &nodes.PlatformAttrs{
+		ScrapliPlatformName: scrapliPlatformName,
+		NapalmPlatformName:  NapalmPlatformName,
+	}
+
+	nrea := nodes.NewNodeRegistryEntryAttributes(defaultCredentials, generateNodeAttributes, platformAttrs)
+
+	r.Register(KindNames, func() nodes.Node {
 		return new(ceos)
-	}, defaultCredentials)
+	}, nrea)
 }
 
 type ceos struct {
@@ -91,8 +104,13 @@ func (n *ceos) Init(cfg *types.NodeConfig, opts ...nodes.NodeOption) error {
 		envSb.WriteString("systemd.setenv=" + k + "=" + v + " ")
 	}
 	envSb.WriteString("'")
+
 	n.Cfg.Cmd = envSb.String()
-	n.Cfg.MacAddress = utils.GenMac("00:1c:73")
+	hwa, err := utils.GenMac("00:1c:73")
+	if err != nil {
+		return err
+	}
+	n.Cfg.MacAddress = hwa.String()
 
 	// mount config dir
 	cfgPath := filepath.Join(n.Cfg.LabDir, "flash")
@@ -283,10 +301,10 @@ func (n *ceos) ceosPostDeploy(_ context.Context) error {
 func (n *ceos) CheckInterfaceName() error {
 	// allow eth and et interfaces
 	// https://regex101.com/r/umQW5Z/2
-	ifRe := regexp.MustCompile(`eth[1-9][\w\.]*$|et[1-9][\w\.]*$`)
-	for _, e := range n.Config().Endpoints {
-		if !ifRe.MatchString(e.EndpointName) {
-			return fmt.Errorf("arista cEOS node %q has an interface named %q which doesn't match the required pattern. Interfaces should be named as ethX or etX, where X consists of alpanumerical characters", n.Cfg.ShortName, e.EndpointName)
+	ifRe := regexp.MustCompile(`eth[1-9][\w.]*$|et[1-9][\w.]*$`)
+	for _, e := range n.Endpoints {
+		if !ifRe.MatchString(e.GetIfaceName()) {
+			return fmt.Errorf("arista cEOS node %q has an interface named %q which doesn't match the required pattern. Interfaces should be named as ethX or etX, where X consists of alpanumerical characters", n.Cfg.ShortName, e.GetIfaceName())
 		}
 	}
 

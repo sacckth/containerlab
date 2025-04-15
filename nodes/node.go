@@ -10,10 +10,15 @@ import (
 	"fmt"
 	"regexp"
 
+	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/srl-labs/containerlab/cert"
 	"github.com/srl-labs/containerlab/clab/exec"
+	"github.com/srl-labs/containerlab/links"
+	"github.com/srl-labs/containerlab/nodes/state"
 	"github.com/srl-labs/containerlab/runtime"
 	"github.com/srl-labs/containerlab/types"
+	"github.com/vishvananda/netlink"
+	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -50,6 +55,7 @@ type PreDeployParams struct {
 	Cert         *cert.Cert
 	TopologyName string
 	TopoPaths    *types.TopoPaths
+	SSHPubKeys   []ssh.PublicKey
 }
 
 // DeployParams contains parameters for the Deploy function.
@@ -74,6 +80,8 @@ type Node interface {
 	PostDeploy(ctx context.Context, params *PostDeployParams) error
 	WithMgmtNet(*types.MgmtNet)           // WithMgmtNet provides the management network for the node
 	WithRuntime(runtime.ContainerRuntime) // WithRuntime provides the runtime for the node
+	// CalculateInterfaceIndex returns with the interface index offset from the first valid dataplane interface based on the interface name. Errors otherwise.
+	CalculateInterfaceIndex(ifName string) (int, error)
 	// CheckInterfaceName checks if a name of the interface referenced in the topology file is correct for this node
 	CheckInterfaceName() error
 	// VerifyStartupConfig checks for existence of the referenced file and maybe performs additional config checks
@@ -87,6 +95,24 @@ type Node interface {
 	UpdateConfigWithRuntimeInfo(context.Context) error
 	// RunExec execute a single command for a given node.
 	RunExec(ctx context.Context, execCmd *exec.ExecCmd) (*exec.ExecResult, error)
+	// Adds the given link to the Node (container). After adding the Link to the node,
+	// the given function f is called within the Nodes namespace to setup the link.
+	AddLinkToContainer(ctx context.Context, link netlink.Link, f func(ns.NetNS) error) error
+	AddEndpoint(e links.Endpoint) error
+	GetEndpoints() []links.Endpoint
+	GetLinkEndpointType() links.LinkEndpointType
+	GetShortName() string
+	// DeployEndpoints deploys the links for the node.
+	DeployEndpoints(ctx context.Context) error
+	// ExecFunction executes the given function within the nodes network namespace
+	ExecFunction(context.Context, func(ns.NetNS) error) error
+	GetState() state.NodeState
+	SetState(state.NodeState)
+	GetSSHConfig() *types.SSHConfig
+	// RunExecFromConfig executes the topologyfile defined exec commands
+	RunExecFromConfig(context.Context, *exec.ExecCollection) error
+	IsHealthy(ctx context.Context) (bool, error)
+	GetContainerStatus(ctx context.Context) runtime.ContainerStatus
 }
 
 type NodeOption func(Node)
@@ -109,11 +135,11 @@ func WithRuntime(r runtime.ContainerRuntime) NodeOption {
 
 // GenericVMInterfaceCheck checks interface names for generic VM-based nodes.
 // These nodes could only have interfaces named ethX, where X is >0.
-func GenericVMInterfaceCheck(nodeName string, eps []types.Endpoint) error {
-	ifRe := regexp.MustCompile(`eth[1-9][0-9]*$`)
+func GenericVMInterfaceCheck(nodeName string, eps []links.Endpoint) error {
+	ifRe := regexp.MustCompile(`eth[1-9][0-9]*$`) // skipcq: GO-C4007
 	for _, e := range eps {
-		if !ifRe.MatchString(e.EndpointName) {
-			return fmt.Errorf("%q interface name %q doesn't match the required pattern. It should be named as ethX, where X is >0", nodeName, e.EndpointName)
+		if !ifRe.MatchString(e.GetIfaceName()) {
+			return fmt.Errorf("%q interface name %q doesn't match the required pattern. It should be named as ethX, where X is >0", nodeName, e.GetIfaceName())
 		}
 	}
 
